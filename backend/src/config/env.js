@@ -103,8 +103,8 @@ export const env = {
   backendPublicUrl: process.env.BACKEND_PUBLIC_URL,
 
   // Database and search
-  mongoUri: process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/marketplace',
-  redisUrl: process.env.REDIS_URL || 'redis://127.0.0.1:6379',
+  mongoUri: process.env.MONGO_URI ? process.env.MONGO_URI.trim() : 'mongodb://127.0.0.1:27017/marketplace',
+  redisUrl: process.env.REDIS_URL ? process.env.REDIS_URL.trim() : 'redis://127.0.0.1:6379',
   esNode: process.env.ES_NODE ? process.env.ES_NODE.trim() : '',
   esApiKey: process.env.ES_API_KEY ? process.env.ES_API_KEY.trim() : '',
   esUsername: process.env.ES_USERNAME ? process.env.ES_USERNAME.trim() : '',

@@ -2,9 +2,11 @@ import Order from '../models/order.model.js';
 import Product from '../models/product.model.js';
 import MockPayment from '../models/mockPayment.model.js';
 import Payout from '../models/payout.model.js';
+import { env } from '../config/env.js';
 import { getPaymentProvider } from '../services/payment/index.js';
 import { markOrderPaid } from '../services/order.service.js';
 import { createPayouts } from '../services/payout.service.js';
+import { acquireLock, releaseLock, startLockHeartbeat } from '../utils/lock.utils.js';
 
 /**
  * POST /api/payments/create-order
@@ -28,6 +30,16 @@ export const createPaymentOrder = async (req, res, next) => {
       return res.status(403).json({ error: 'Forbidden: You do not own this order' });
     }
 
+    // If order is already paid, return idempotent success
+    if (order.payment.status === 'paid') {
+      return res.status(200).json({
+        alreadyPaid: true,
+        providerOrderId: order.payment.providerOrderId,
+        order,
+        message: 'Order has already been paid successfully',
+      });
+    }
+
     // Only allow if payment status is pending or failed
     if (order.payment.status !== 'pending' && order.payment.status !== 'failed') {
       return res.status(400).json({
@@ -46,33 +58,131 @@ export const createPaymentOrder = async (req, res, next) => {
       }
     }
 
-    const provider = getPaymentProvider();
     const amountPaise = Math.round(order.total * 100);
 
-    const providerOrder = await provider.createOrder({
-      orderId: order._id.toString(),
-      amountPaise,
-      currency: 'INR',
-      notes: {
+    // Fast path: If order already has an active provider order session in pending status, reuse it
+    if (order.payment.status === 'pending' && order.payment.providerOrderId) {
+      return res.status(200).json({
+        providerOrderId: order.payment.providerOrderId,
+        amount: amountPaise,
+        currency: 'INR',
+        provider: order.payment.provider || 'mock',
         orderNumber: order.orderNumber,
-        customerId: req.user._id.toString(),
-      },
-    });
+      });
+    }
 
-    // Save providerOrderId on order
-    order.payment.provider = providerOrder.provider;
-    order.payment.providerOrderId = providerOrder.providerOrderId;
-    order.payment.status = 'pending';
-    order.payment.failureReason = '';
-    await order.save();
+    // Concurrency guard: Acquire atomic lock for provider order creation (30s TTL with heartbeat renewal)
+    const lockResource = `order:${order._id}`;
+    let lockToken = await acquireLock(lockResource, 30);
 
-    return res.status(200).json({
-      providerOrderId: providerOrder.providerOrderId,
-      amount: amountPaise,
-      currency: providerOrder.currency || 'INR',
-      provider: providerOrder.provider,
-      orderNumber: order.orderNumber,
-    });
+    if (!lockToken) {
+      // Another concurrent request is currently creating the provider order.
+      // Poll briefly for completion.
+      const maxWaitMs = env.nodeEnv === 'test' ? 300 : 5000;
+      const pollIntervalMs = env.nodeEnv === 'test' ? 25 : 50;
+      const startTime = Date.now();
+
+      while (Date.now() - startTime < maxWaitMs) {
+        await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+
+        const latestOrder = await Order.findById(orderId);
+        if (latestOrder) {
+          if (latestOrder.payment.status === 'paid') {
+            return res.status(200).json({
+              alreadyPaid: true,
+              providerOrderId: latestOrder.payment.providerOrderId,
+              order: latestOrder,
+              message: 'Order has already been paid successfully',
+            });
+          }
+
+          if (latestOrder.payment.status === 'pending' && latestOrder.payment.providerOrderId) {
+            return res.status(200).json({
+              providerOrderId: latestOrder.payment.providerOrderId,
+              amount: amountPaise,
+              currency: 'INR',
+              provider: latestOrder.payment.provider || 'mock',
+              orderNumber: latestOrder.orderNumber,
+            });
+          }
+        }
+
+        // Try acquiring lock again if the other request finished or failed
+        lockToken = await acquireLock(lockResource, 30);
+        if (lockToken) {
+          break;
+        }
+      }
+
+      // If waiting timed out and lock is still held by another request, return retryable response
+      if (!lockToken) {
+        return res.status(409).json({
+          error: 'Payment session initialization is currently in progress. Please retry in a moment.',
+          code: 'PAYMENT_INITIALIZATION_IN_PROGRESS',
+          retryable: true,
+        });
+      }
+    }
+
+    const heartbeat = startLockHeartbeat(lockResource, lockToken, 30, 10000);
+
+    try {
+      // Re-check order state inside lock
+      const currentOrder = await Order.findById(orderId);
+      if (currentOrder) {
+        if (currentOrder.payment.status === 'paid') {
+          return res.status(200).json({
+            alreadyPaid: true,
+            providerOrderId: currentOrder.payment.providerOrderId,
+            order: currentOrder,
+            message: 'Order has already been paid successfully',
+          });
+        }
+
+        if (currentOrder.payment.status === 'pending' && currentOrder.payment.providerOrderId) {
+          return res.status(200).json({
+            providerOrderId: currentOrder.payment.providerOrderId,
+            amount: amountPaise,
+            currency: 'INR',
+            provider: currentOrder.payment.provider || 'mock',
+            orderNumber: currentOrder.orderNumber,
+          });
+        }
+      }
+
+      const provider = getPaymentProvider();
+      const targetOrder = currentOrder || order;
+
+      const providerOrder = await provider.createOrder({
+        orderId: targetOrder._id.toString(),
+        amountPaise,
+        currency: 'INR',
+        notes: {
+          orderNumber: targetOrder.orderNumber,
+          customerId: req.user._id.toString(),
+        },
+      });
+
+      // Save providerOrderId on order
+      targetOrder.payment.provider = providerOrder.provider;
+      targetOrder.payment.providerOrderId = providerOrder.providerOrderId;
+      targetOrder.payment.status = 'pending';
+      targetOrder.payment.failureReason = '';
+      await targetOrder.save();
+
+      return res.status(200).json({
+        providerOrderId: providerOrder.providerOrderId,
+        amount: amountPaise,
+        currency: providerOrder.currency || 'INR',
+        provider: providerOrder.provider,
+        orderNumber: targetOrder.orderNumber,
+      });
+    } finally {
+      heartbeat.stop();
+      if (lockToken) {
+        await releaseLock(lockResource, lockToken);
+      }
+    }
   } catch (err) {
     next(err);
   }

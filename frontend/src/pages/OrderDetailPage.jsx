@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, Link, useSearchParams, useLocation } from 'react-router-dom';
 import api from '../api/axios';
 import useAuth from '../hooks/useAuth';
@@ -15,6 +15,7 @@ export default function OrderDetailPage() {
   const location = useLocation();
   const isNewlyPlaced = searchParams.get('new') === 'true' || location.state?.newlyPlaced;
   const shouldAutoPay = searchParams.get('pay') === '1' || location.state?.autoPay === true;
+  const autoPayAttemptedRef = useRef(false);
 
   const [order, setOrder] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -70,36 +71,58 @@ export default function OrderDetailPage() {
     order.subOrders.length > 0 &&
     order.subOrders.every((s) => s.status === 'placed');
 
-  // Auto-open Test Gateway modal if directed to pay immediately
+  // Auto-open Test Gateway modal if directed to pay immediately (only once per mount/session)
   useEffect(() => {
     if (
       order &&
       shouldAutoPay &&
+      !autoPayAttemptedRef.current &&
       (order.payment?.status === 'pending' || order.payment?.status === 'failed')
     ) {
+      autoPayAttemptedRef.current = true;
       setIsGatewayOpen(true);
     }
   }, [order, shouldAutoPay]);
 
   const handleCloseGateway = () => {
     setIsGatewayOpen(false);
-    if (searchParams.get('pay')) {
-      const nextParams = new URLSearchParams(searchParams);
+    const nextParams = new URLSearchParams(searchParams);
+    let shouldUpdateParams = false;
+    if (nextParams.has('pay')) {
       nextParams.delete('pay');
-      setSearchParams(nextParams, { replace: true });
+      shouldUpdateParams = true;
+    }
+    if (shouldUpdateParams || location.state?.autoPay) {
+      setSearchParams(nextParams, { replace: true, state: {} });
     }
   };
 
-  const handlePaymentSuccess = (paidOrder) => {
-    setOrder(paidOrder);
+  const handlePaymentSuccess = async (paidOrder) => {
+    if (paidOrder) {
+      setOrder(paidOrder);
+    }
     setIsGatewayOpen(false);
-    if (searchParams.get('pay')) {
-      const nextParams = new URLSearchParams(searchParams);
+    const nextParams = new URLSearchParams(searchParams);
+    let shouldUpdateParams = false;
+    if (nextParams.has('pay')) {
       nextParams.delete('pay');
-      setSearchParams(nextParams, { replace: true });
+      shouldUpdateParams = true;
+    }
+    if (shouldUpdateParams || location.state?.autoPay) {
+      setSearchParams(nextParams, { replace: true, state: {} });
     }
     showToast('Payment captured successfully!', 'success');
     setActionMessage('Payment captured successfully!');
+
+    // Fetch authoritative order state from server to guarantee sync
+    try {
+      const res = await api.get(`/orders/${id}`);
+      if (res.data?.order) {
+        setOrder(res.data.order);
+      }
+    } catch {
+      // ignore background refresh failure
+    }
   };
 
   const handlePaymentError = useCallback((errMsg) => {
@@ -540,10 +563,10 @@ export default function OrderDetailPage() {
         </div>
       )}
 
-      {order && (
+      {order && isGatewayOpen && order.payment?.status !== 'paid' && order.payment?.status !== 'refunded' && (
         <TestGatewayModal
           order={order}
-          isOpen={isGatewayOpen && order.payment?.status !== 'paid' && order.payment?.status !== 'refunded'}
+          isOpen={true}
           onClose={handleCloseGateway}
           onError={handlePaymentError}
           onSuccess={handlePaymentSuccess}

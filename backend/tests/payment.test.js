@@ -12,6 +12,8 @@ import MockPayment from '../src/models/mockPayment.model.js';
 import { generateAccessToken } from '../src/utils/token.utils.js';
 import { getPaymentProvider } from '../src/services/payment/index.js';
 import { createPayouts } from '../src/services/payout.service.js';
+import { acquireLock, releaseLock } from '../src/utils/lock.utils.js';
+import redisClient from '../src/config/redis.js';
 
 describe('Phase 6: Payment Provider Layer, Sandbox Gateway, Webhooks & Payout Splits', () => {
   const originalFakePay = env.enableFakePay;
@@ -206,6 +208,223 @@ describe('Phase 6: Payment Provider Layer, Sandbox Gateway, Webhooks & Payout Sp
         .send({ orderId: mockOrder._id });
 
       expect(res.status).toBe(403);
+    });
+
+    it('prevents non-owner from accessing already-paid order (403 Forbidden)', async () => {
+      const mockOrder = {
+        _id: '6717d000a1b2c3d4e5f69302b',
+        customerId: customerA._id, // Owned by Alice
+        total: 2000,
+        items: [{ productId: productA._id, qty: 1, title: 'Studio Headphones' }],
+        payment: { status: 'paid', providerOrderId: 'mockord_alice_paid' },
+        save: jest.fn().mockResolvedValue(true),
+      };
+
+      jest.spyOn(Order, 'findById').mockResolvedValue(mockOrder);
+
+      // Bob tries to create/check payment for Alice's paid order
+      const res = await request(app)
+        .post('/api/payments/create-order')
+        .set('Authorization', `Bearer ${tokenCustomerB}`)
+        .send({ orderId: mockOrder._id });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toMatch(/Forbidden/i);
+    });
+
+    it('returns alreadyPaid: true idempotently when owner requests payment order for already-paid order', async () => {
+      const mockOrder = {
+        _id: '6717d000a1b2c3d4e5f69302c',
+        customerId: customerA._id,
+        total: 2000,
+        items: [{ productId: productA._id, qty: 1, title: 'Studio Headphones' }],
+        payment: { status: 'paid', providerOrderId: 'mockord_already_paid_123' },
+        save: jest.fn().mockResolvedValue(true),
+      };
+
+      jest.spyOn(Order, 'findById').mockResolvedValue(mockOrder);
+
+      const res = await request(app)
+        .post('/api/payments/create-order')
+        .set('Authorization', `Bearer ${tokenCustomerA}`)
+        .send({ orderId: mockOrder._id });
+
+      expect(res.status).toBe(200);
+      expect(res.body.alreadyPaid).toBe(true);
+      expect(res.body.providerOrderId).toBe('mockord_already_paid_123');
+      expect(res.body.order).toBeDefined();
+      expect(res.body.order.payment.status).toBe('paid');
+    });
+
+    it('reuses existing providerOrderId when payment is pending', async () => {
+      const mockOrder = {
+        _id: '6717d000a1b2c3d4e5f69302d',
+        orderNumber: 'ORD-20261025-REUSE',
+        customerId: customerA._id,
+        total: 3500,
+        items: [{ productId: productA._id, qty: 1, title: 'Studio Headphones' }],
+        payment: { status: 'pending', provider: 'mock', providerOrderId: 'mockord_existing_session_999' },
+        save: jest.fn().mockResolvedValue(true),
+      };
+
+      jest.spyOn(Order, 'findById').mockResolvedValue(mockOrder);
+
+      const res = await request(app)
+        .post('/api/payments/create-order')
+        .set('Authorization', `Bearer ${tokenCustomerA}`)
+        .send({ orderId: mockOrder._id });
+
+      expect(res.status).toBe(200);
+      expect(res.body.providerOrderId).toBe('mockord_existing_session_999');
+      expect(res.body.amount).toBe(350000);
+      // save was not called to overwrite existing provider session
+      expect(mockOrder.save).not.toHaveBeenCalled();
+    });
+
+    it('concurrent payment order creation requests return the same providerOrderId and create only one provider order', async () => {
+      const mockOrder = {
+        _id: '6717d000a1b2c3d4e5f69302e',
+        orderNumber: 'ORD-20261025-CONCURRENT',
+        customerId: customerA._id,
+        total: 1500,
+        items: [{ productId: productA._id, qty: 1, title: 'Studio Headphones' }],
+        payment: { status: 'pending', provider: 'mock', providerOrderId: '' },
+        save: jest.fn().mockImplementation(function () {
+          return Promise.resolve(this);
+        }),
+      };
+
+      jest.spyOn(Order, 'findById').mockResolvedValue(mockOrder);
+
+      const provider = getPaymentProvider();
+      const createOrderSpy = jest.spyOn(provider, 'createOrder');
+
+      // Dispatch simultaneous requests for an order with no existing providerOrderId
+      const [res1, res2] = await Promise.all([
+        request(app)
+          .post('/api/payments/create-order')
+          .set('Authorization', `Bearer ${tokenCustomerA}`)
+          .send({ orderId: mockOrder._id }),
+        request(app)
+          .post('/api/payments/create-order')
+          .set('Authorization', `Bearer ${tokenCustomerA}`)
+          .send({ orderId: mockOrder._id }),
+      ]);
+
+      expect(res1.status).toBe(200);
+      expect(res2.status).toBe(200);
+      expect(res1.body.providerOrderId).toBeDefined();
+      expect(res1.body.providerOrderId).toBe(res2.body.providerOrderId);
+      expect(mockOrder.payment.providerOrderId).toBe(res1.body.providerOrderId);
+
+      // Verifies that provider.createOrder was called strictly ONCE
+      expect(createOrderSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('releases lock and allows subsequent retry if provider order creation fails', async () => {
+      const mockOrder = {
+        _id: '6717d000a1b2c3d4e5f69302f',
+        orderNumber: 'ORD-20261025-FAILRETRY',
+        customerId: customerA._id,
+        total: 2000,
+        items: [{ productId: productA._id, qty: 1, title: 'Studio Headphones' }],
+        payment: { status: 'pending', provider: 'mock', providerOrderId: '' },
+        save: jest.fn().mockImplementation(function () {
+          return Promise.resolve(this);
+        }),
+      };
+
+      jest.spyOn(Order, 'findById').mockResolvedValue(mockOrder);
+
+      const provider = getPaymentProvider();
+      // First attempt fails due to simulated gateway failure
+      jest.spyOn(provider, 'createOrder').mockRejectedValueOnce(new Error('Gateway timeout during session init'));
+
+      const failRes = await request(app)
+        .post('/api/payments/create-order')
+        .set('Authorization', `Bearer ${tokenCustomerA}`)
+        .send({ orderId: mockOrder._id });
+
+      expect(failRes.status).toBe(500);
+
+      // Second attempt immediately after failure should acquire lock and succeed
+      const successRes = await request(app)
+        .post('/api/payments/create-order')
+        .set('Authorization', `Bearer ${tokenCustomerA}`)
+        .send({ orderId: mockOrder._id });
+
+      expect(successRes.status).toBe(200);
+      expect(successRes.body.providerOrderId).toBeDefined();
+    });
+
+    it('fails safely with HTTP 503 in production if Redis distributed lock is unavailable', async () => {
+      const originalEnv = env.nodeEnv;
+      env.nodeEnv = 'production';
+
+      const mockOrder = {
+        _id: '6717d000a1b2c3d4e5f69302g',
+        orderNumber: 'ORD-20261025-REDISFAIL',
+        customerId: customerA._id,
+        total: 1000,
+        items: [{ productId: productA._id, qty: 1, title: 'Studio Headphones' }],
+        payment: { status: 'pending', provider: 'mock', providerOrderId: '' },
+      };
+
+      jest.spyOn(Order, 'findById').mockResolvedValue(mockOrder);
+      const originalRedisStatus = redisClient.status;
+      Object.defineProperty(redisClient, 'status', { value: 'close', configurable: true });
+
+      try {
+        const res = await request(app)
+          .post('/api/payments/create-order')
+          .set('Authorization', `Bearer ${tokenCustomerA}`)
+          .send({ orderId: mockOrder._id });
+
+        expect(res.status).toBe(503);
+        expect(res.body.message || res.body.error).toMatch(/Redis connection required/i);
+      } finally {
+        env.nodeEnv = originalEnv;
+        Object.defineProperty(redisClient, 'status', { value: originalRedisStatus, configurable: true });
+      }
+    });
+
+    it('returns HTTP 409 retryable response when polling timeout is exceeded and does not create duplicate order', async () => {
+      const mockOrder = {
+        _id: '6717d000a1b2c3d4e5f69302h',
+        orderNumber: 'ORD-20261025-TIMEOUT',
+        customerId: customerA._id,
+        total: 1000,
+        items: [{ productId: productA._id, qty: 1, title: 'Studio Headphones' }],
+        payment: { status: 'pending', provider: 'mock', providerOrderId: '' },
+      };
+
+      jest.spyOn(Order, 'findById').mockResolvedValue(mockOrder);
+
+      const provider = getPaymentProvider();
+      const createOrderSpy = jest.spyOn(provider, 'createOrder');
+
+      // Acquire lock externally to simulate another instance actively processing
+      const lockKey = `order:${mockOrder._id}`;
+      const externalToken = await acquireLock(lockKey, 30);
+      expect(externalToken).toBeDefined();
+
+      try {
+        // Fast-forward polling by overriding setTimeout or letting short poll expire
+        const startTime = Date.now();
+        const res = await request(app)
+          .post('/api/payments/create-order')
+          .set('Authorization', `Bearer ${tokenCustomerA}`)
+          .send({ orderId: mockOrder._id });
+
+        expect(res.status).toBe(409);
+        expect(res.body.code).toBe('PAYMENT_INITIALIZATION_IN_PROGRESS');
+        expect(res.body.retryable).toBe(true);
+
+        // Crucial: createOrder was never called by the timed-out request
+        expect(createOrderSpy).not.toHaveBeenCalled();
+      } finally {
+        await releaseLock(lockKey, externalToken);
+      }
     });
   });
 
@@ -607,6 +826,60 @@ describe('Phase 6: Payment Provider Layer, Sandbox Gateway, Webhooks & Payout Sp
 
       expect(verifyRes.status).toBe(200);
       expect(mockOrder.payment.status).toBe('paid');
+    });
+
+    it('duplicate verify payment calls on already-paid order return 200 idempotently and do not double-decrement stock', async () => {
+      const providerOrderId = 'mockord_already_paid_dup';
+      const paymentId = 'pay_mock_dup_01';
+      const sig = crypto
+        .createHmac('sha256', env.mockGatewaySecret)
+        .update(`${providerOrderId}|${paymentId}`)
+        .digest('hex');
+
+      const mockPaidOrder = {
+        _id: '6717d000a1b2c3d4e5f69306b',
+        customerId: customerA._id,
+        total: 2000,
+        items: [{ productId: productA._id, qty: 1, title: 'Studio Headphones' }],
+        subOrders: [
+          {
+            vendorId: vendor1Doc._id,
+            subtotal: 2000,
+            commission: 200,
+            vendorPayout: 1800,
+            status: 'placed',
+          },
+        ],
+        payment: {
+          status: 'paid',
+          provider: 'mock',
+          providerOrderId,
+          providerPaymentId: paymentId,
+        },
+        save: jest.fn().mockResolvedValue(true),
+      };
+
+      jest.spyOn(Order, 'findOne').mockResolvedValue(mockPaidOrder);
+      jest.spyOn(Order, 'findById').mockResolvedValue(mockPaidOrder);
+      jest.spyOn(Payout, 'findOneAndUpdate').mockResolvedValue({ status: 'processed' });
+      jest.spyOn(Vendor, 'findById').mockResolvedValue(vendor1Doc);
+      const stockSpy = jest.spyOn(Product, 'findOneAndUpdate');
+
+      // Subsequent verify call on already-paid order
+      const res = await request(app)
+        .post('/api/payments/verify')
+        .set('Authorization', `Bearer ${tokenCustomerA}`)
+        .send({
+          order_id: providerOrderId,
+          payment_id: paymentId,
+          signature: sig,
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.order.payment.status).toBe('paid');
+      // Stock update was NOT called again
+      expect(stockSpy).not.toHaveBeenCalled();
     });
   });
 

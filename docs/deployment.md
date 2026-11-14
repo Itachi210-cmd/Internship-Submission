@@ -114,7 +114,7 @@ You can deploy either using the included [`render.yaml`](../render.yaml) bluepri
    - **Build Command:** `npm ci`
    - **Start Command:** `npm start`
    - **Instance Type:** `Free`
-   - **Health Check Path:** `/api/health`
+   - **Health Check Path:** `/api/health/live` (Liveness probe for Render zero-downtime deployment)
 
 ### Environment Variables on Render
 Add each of the following under the **Environment** tab:

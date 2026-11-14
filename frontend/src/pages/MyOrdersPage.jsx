@@ -235,10 +235,10 @@ export default function MyOrdersPage() {
         </div>
       )}
 
-      {activePaymentOrder && (
+      {activePaymentOrder && isGatewayOpen && activePaymentOrder.payment?.status !== 'paid' && activePaymentOrder.payment?.status !== 'refunded' && (
         <TestGatewayModal
           order={activePaymentOrder}
-          isOpen={isGatewayOpen && activePaymentOrder.payment?.status !== 'paid' && activePaymentOrder.payment?.status !== 'refunded'}
+          isOpen={true}
           onClose={() => {
             setIsGatewayOpen(false);
             setActivePaymentOrder(null);

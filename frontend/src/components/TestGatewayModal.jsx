@@ -48,7 +48,7 @@ export default function TestGatewayModal({ order, isOpen, onClose, onSuccess, on
   });
 
   const isInitiatingRef = useRef(false);
-  const initializedOrderIdRef = useRef(null);
+  const initializedOrderIdRef = useRef(order?.payment?.providerOrderId ? order?._id : null);
 
   // Sync amount and reset session state when order changes
   useEffect(() => {
@@ -98,6 +98,31 @@ export default function TestGatewayModal({ order, isOpen, onClose, onSuccess, on
       setStep('init');
       setErrorMessage('');
       const res = await api.post('/payments/create-order', { orderId });
+
+      if (res.data?.alreadyPaid) {
+        setStep('success');
+        if (res.data.order && res.data.order.payment?.status === 'paid') {
+          onSuccessRef.current?.(res.data.order);
+        } else {
+          try {
+            const fresh = await api.get(`/orders/${orderId}`);
+            if (fresh.data?.order) {
+              onSuccessRef.current?.(fresh.data.order);
+              return;
+            }
+          } catch {
+            // ignore
+          }
+          const latestOrder = orderRef.current;
+          onSuccessRef.current?.({
+            ...latestOrder,
+            ...(res.data.order || {}),
+            payment: { ...(latestOrder?.payment || {}), ...(res.data.order?.payment || {}), status: 'paid' },
+          });
+        }
+        return;
+      }
+
       setProviderOrderId(res.data.providerOrderId);
       setAmountPaise(res.data.amount);
       initializedOrderIdRef.current = orderId;
@@ -110,13 +135,24 @@ export default function TestGatewayModal({ order, isOpen, onClose, onSuccess, on
         err.message ||
         'Failed to initialize payment session.';
 
-      // If the backend indicates the order is already paid, complete successfully instead of showing an error
+      // If the backend indicates the order is already paid, complete successfully using authoritative order data
       const isAlreadyPaidError =
         typeof errorMsg === 'string' &&
-        (errorMsg.includes('payment status "paid"') || errorMsg.includes('payment status "PAID"'));
+        (errorMsg.toLowerCase().includes('payment status "paid"') ||
+         errorMsg.toLowerCase().includes('already paid') ||
+         errorMsg.toLowerCase().includes('already been paid'));
 
       if (isAlreadyPaidError) {
         setStep('success');
+        try {
+          const fresh = await api.get(`/orders/${orderId}`);
+          if (fresh.data?.order && fresh.data.order.payment?.status === 'paid') {
+            onSuccessRef.current?.(fresh.data.order);
+            return;
+          }
+        } catch {
+          // ignore
+        }
         const latestOrder = orderRef.current;
         onSuccessRef.current?.({
           ...latestOrder,
