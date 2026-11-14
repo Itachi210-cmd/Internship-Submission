@@ -121,6 +121,10 @@ export const formatProductForES = async (product) => {
  * @param {Object} options { recreate: boolean }
  */
 export const ensureIndex = async (targetIndex = env.esIndex, options = { recreate: false }) => {
+  if (!esClient) {
+    console.log(`[Elasticsearch] Notice: Elasticsearch not configured. Skipping index initialization.`);
+    return false;
+  }
   try {
     const exists = await esClient.indices.exists({ index: targetIndex });
 
@@ -148,6 +152,7 @@ export const ensureIndex = async (targetIndex = env.esIndex, options = { recreat
  * Index a single active product into Elasticsearch
  */
 export const indexProduct = async (product, targetIndex = env.esIndex) => {
+  if (!esClient) return null;
   // If product is inactive, remove from index instead
   if (product.isActive === false) {
     const id = product._id ? product._id.toString() : product.id;
@@ -180,7 +185,7 @@ export const updateProductInES = async (product, targetIndex = env.esIndex) => {
  * Remove product from Elasticsearch index
  */
 export const removeProduct = async (id, targetIndex = env.esIndex) => {
-  if (!id) return null;
+  if (!esClient || !id) return null;
   try {
     const response = await esClient.delete({
       index: targetIndex,
@@ -200,7 +205,7 @@ export const removeProduct = async (id, targetIndex = env.esIndex) => {
  * Update ratingAvg and ratingCount directly in Elasticsearch
  */
 export const updateRating = async (productId, ratingAvg, ratingCount, targetIndex = env.esIndex) => {
-  if (!productId) return null;
+  if (!esClient || !productId) return null;
   try {
     const response = await esClient.update({
       index: targetIndex,
@@ -225,6 +230,10 @@ export const updateRating = async (productId, ratingAvg, ratingCount, targetInde
  * @param {string} targetIndex
  */
 export const searchProducts = async (params = {}, targetIndex = env.esIndex) => {
+  if (!esClient) {
+    throw new Error('Elasticsearch is not configured');
+  }
+
   const {
     q,
     category,
@@ -413,6 +422,10 @@ export const searchProducts = async (params = {}, targetIndex = env.esIndex) => 
  * Returns up to 5 unique title suggestions
  */
 export const suggest = async (prefix, targetIndex = env.esIndex) => {
+  if (!esClient) {
+    throw new Error('Elasticsearch is not configured');
+  }
+
   if (!prefix || !prefix.trim()) {
     return [];
   }

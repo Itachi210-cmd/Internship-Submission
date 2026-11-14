@@ -1,0 +1,70 @@
+services:
+  - type: web
+    name: shopnest-backend
+    runtime: node
+    rootDir: backend
+    plan: free
+    region: oregon
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: CLIENT_URL
+        sync: false
+      - key: BACKEND_PUBLIC_URL
+        sync: false
+      - key: MONGO_URI
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: JWT_ACCESS_SECRET
+        sync: false
+      - key: JWT_REFRESH_SECRET
+        sync: false
+      - key: COOKIE_SAMESITE
+        value: lax
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: PAYMENT_PROVIDER
+        value: mock
+      - key: MOCK_GATEWAY_SECRET
+        sync: false
+      - key: MOCK_WEBHOOK_SECRET
+        sync: false
+      - key: MOCK_WEBHOOK_ENABLED
+        value: "true"
+      - key: ENABLE_FAKE_PAY
+        value: "false"
+      - key: AWS_REGION
+        sync: false
+      - key: AWS_BUCKET
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_FORCE_PATH_STYLE
+        value: "true"
+      - key: S3_PUBLIC_URL
+        sync: false
+      - key: ES_NODE
+        sync: false
+      - key: ES_API_KEY
+        sync: false
+      - key: ES_USERNAME
+        sync: false
+      - key: ES_PASSWORD
+        sync: false
+      - key: ES_INDEX
+        value: products
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false

@@ -321,8 +321,12 @@ export const markOrderPaid = async (orderId, paymentDetails = {}) => {
     }
   }
 
-  // Clear customer's Redis cart
-  await clearCart(order.customerId);
+  // Clear customer's Redis cart (graceful on Redis downtime)
+  try {
+    await clearCart(order.customerId);
+  } catch (cartErr) {
+    console.warn(`[OrderService] Cart clearing warning:`, cartErr.message);
+  }
 
   return { order, success: true };
 };

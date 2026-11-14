@@ -1,34 +1,41 @@
 import Redis from 'ioredis';
 import { env } from './env.js';
 
-/**
- * ioredis client instance
- */
-export const redisClient = new Redis(env.redisUrl, {
+const redisOptions = {
   lazyConnect: true,
-  maxRetriesPerRequest: 1,
+  maxRetriesPerRequest: 3,
   retryStrategy(times) {
-    // Retry reconnect after a small delay, max 3s
+    // Exponential backoff reconnect: 150ms, 300ms... capped at 3000ms
     return Math.min(times * 150, 3000);
   },
   reconnectOnError(err) {
     const targetError = 'READONLY';
-    if (err.message.includes(targetError)) {
+    if (err && err.message && err.message.includes(targetError)) {
       return true; // Reconnect when receiving READONLY error
     }
     return false;
   },
-});
+};
+
+// Enable TLS for secure rediss:// protocol (e.g. Upstash Redis)
+if (env.redisUrl && env.redisUrl.startsWith('rediss://')) {
+  redisOptions.tls = {
+    rejectUnauthorized: false,
+  };
+}
+
+/**
+ * ioredis client instance
+ */
+export const redisClient = new Redis(env.redisUrl, redisOptions);
 
 redisClient.on('connect', () => {
   console.log('[Redis] Connected successfully');
 });
 
 redisClient.on('error', (err) => {
-  // Avoid crashing app on background reconnect failures
-  if (err.code !== 'ECONNREFUSED') {
-    console.error(`[Redis] Error: ${err.message}`);
-  }
+  // Catch all errors so background reconnect drops never crash the Node process
+  console.warn(`[Redis] Connection warning: ${err.message || 'Transient error'}`);
 });
 
 let redisRetryTimeout = null;

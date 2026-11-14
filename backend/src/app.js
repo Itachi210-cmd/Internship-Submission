@@ -7,6 +7,7 @@ import { env } from './config/env.js';
 import { apiRateLimiter } from './middleware/rateLimiter.js';
 import { notFoundHandler, globalErrorHandler } from './middleware/errorHandler.js';
 import healthRoutes from './routes/health.routes.js';
+import versionRoutes from './routes/version.routes.js';
 import authRoutes from './routes/auth.routes.js';
 import testRoutes from './routes/test.routes.js';
 import vendorRoutes from './routes/vendor.routes.js';
@@ -30,6 +31,9 @@ import adminAnalyticsRoutes from './routes/admin.analytics.routes.js';
 import { handleWebhook } from './controllers/payment.controller.js';
 
 const app = express();
+
+// Trust reverse proxy (Render, Vercel, load balancers) so req.ip, secure cookies & rate limiters work
+app.set('trust proxy', 1);
 
 // Security headers
 app.use(helmet());
@@ -70,11 +74,14 @@ app.post('/api/payments/webhook', express.raw({ type: '*/*' }), handleWebhook);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Public health & version routes mounted BEFORE rate limiter for Render health checks and warm-up pings
+app.use('/api/health', healthRoutes);
+app.use('/api/version', versionRoutes);
+
 // Apply rate limiter to general API routes
 app.use('/api', apiRateLimiter);
 
 // Route mounts
-app.use('/api/health', healthRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/test', testRoutes);
 app.use('/api/vendors', vendorRoutes);

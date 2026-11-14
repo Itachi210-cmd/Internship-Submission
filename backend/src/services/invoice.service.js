@@ -47,6 +47,10 @@ export const streamInvoicePDF = async (orderId, user, res) => {
     margin: 50,
     size: 'A4',
     bufferPages: true,
+    info: {
+      Title: `Invoice ${order.orderNumber} | <ShopNest>`,
+      Author: '<ShopNest>',
+    },
   });
 
   // Set response headers
@@ -63,7 +67,7 @@ export const streamInvoicePDF = async (orderId, user, res) => {
     .fontSize(22)
     .font('Helvetica-Bold')
     .fillColor('#1e293b')
-    .text('MULTI-VENDOR MARKETPLACE', 50, 50);
+    .text('<ShopNest>', 50, 50);
 
   doc
     .fontSize(10)
@@ -280,7 +284,7 @@ export const streamInvoicePDF = async (orderId, user, res) => {
     .font('Helvetica')
     .fillColor('#94a3b8')
     .text(
-      'Thank you for shopping with us! This computer-generated invoice is valid without a physical signature.',
+      'Thank you for shopping with <ShopNest>! This computer-generated invoice is valid without a physical signature.',
       50,
       tableY + 12,
       { align: 'center', width: 495 }

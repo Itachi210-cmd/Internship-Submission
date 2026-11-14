@@ -9,17 +9,11 @@ export default function Footer() {
           {/* Brand info */}
           <div className="footer-brand-col">
             <Link to="/" className="nav-brand" style={{ marginBottom: '0.75rem', display: 'inline-flex' }}>
-              <div className="brand-icon">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z" />
-                  <line x1="3" y1="6" x2="21" y2="6" />
-                  <path d="M16 10a4 4 0 0 1-8 0" />
-                </svg>
-              </div>
-              <span className="brand-name">Marketplace</span>
+              <div className="brand-icon">S</div>
+              <span className="brand-name">{'<ShopNest>'}</span>
             </Link>
             <p className="footer-text">
-              The multi-vendor marketplace ecosystem for independent brands and modern shoppers. Browse multiple stores, checkout in one seamless transaction.
+              The multi-vendor ecosystem for independent brands and modern shoppers at {'<ShopNest>'}. Browse multiple stores, checkout in one seamless transaction.
             </p>
           </div>
 
@@ -57,7 +51,7 @@ export default function Footer() {
         {/* Bottom Bar */}
         <div className="footer-bottom">
           <p className="footer-copyright">
-            &copy; {new Date().getFullYear()} Marketplace Platform. All rights reserved.
+            &copy; 2026 {'<ShopNest>'}
           </p>
         </div>
       </div>

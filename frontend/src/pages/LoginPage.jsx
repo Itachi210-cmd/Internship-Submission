@@ -66,7 +66,7 @@ export default function LoginPage() {
               </svg>
             </div>
             <h1 className="stitch-auth-title">Welcome Back</h1>
-            <p className="stitch-auth-subtitle">Sign in to your Multi-Vendor Marketplace account</p>
+            <p className="stitch-auth-subtitle">Sign in to your {'<ShopNest>'} account</p>
           </div>
 
           {error && (

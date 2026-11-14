@@ -1,5 +1,7 @@
 
-# Multi-Vendor E-Commerce Marketplace — Project Document
+# <ShopNest> — Multi-Vendor E-Commerce Platform Project Document
+
+*Multi-Vendor E-Commerce Marketplace project (<ShopNest>)*
 
 **Track:** Full-Stack Development  
 **Timeline:** Start 20 Oct 2026 · Deadline 20 Nov 2026  

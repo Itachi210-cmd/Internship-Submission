@@ -90,7 +90,7 @@ export default function VendorApprovalsPage() {
     <div className="stitch-admin-approvals-container">
       <div className="stitch-admin-header">
         <div>
-          <span className="stitch-admin-control-badge">Marketplace Governance</span>
+          <span className="stitch-admin-control-badge">{'<ShopNest>'} Governance</span>
           <h1 className="stitch-admin-title">Vendor Store Approvals</h1>
           <p className="stitch-admin-subtitle">
             Review incoming seller applications, authorize storefront access, and configure custom commission splits.

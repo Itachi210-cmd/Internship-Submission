@@ -1,6 +1,6 @@
-# Multi-Vendor E-Commerce Marketplace
+# <ShopNest> - Multi-Vendor E-Commerce Platform
 
-A multi-vendor e-commerce marketplace platform inspired by Amazon and Meesho, engineered for seamless vendor onboarding, catalog management, high-speed faceted search, Redis-backed carts, and automated payment splits via Razorpay Route.
+A modern multi-vendor e-commerce platform (<ShopNest>) inspired by Amazon and Meesho, engineered for seamless vendor onboarding, catalog management, high-speed faceted search, Redis-backed carts, and automated payment splits via Razorpay Route.
 
 ---
 
@@ -289,7 +289,7 @@ Open `http://localhost:5173` in your browser. The Home page includes an integrat
 - `PATCH  /api/orders/:id/cancel`: Customer cancels order while all sub-orders are still `placed` (refunds payment and restores stock)
 - `GET    /api/vendor/orders`: Vendor views only sub-orders belonging to their store from paid orders
 - `PATCH  /api/vendor/orders/:orderId/status`: Vendor advances strictly through `placed -> packed -> shipped -> delivered`
-- `GET    /api/admin/orders`: Admin overview of all marketplace transactions with payment and payout summaries
+- `GET    /api/admin/orders`: Admin overview of all <ShopNest> transactions with payment and payout summaries
 
 ---
 

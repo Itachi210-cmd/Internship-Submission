@@ -46,7 +46,7 @@ export default class ErrorBoundary extends React.Component {
               Something went wrong
             </h1>
             <p className="stitch-empty-orders-desc" style={{ marginBottom: '1.5rem' }}>
-              An unexpected error occurred while rendering this view. You can try refreshing or returning to the marketplace home page.
+              An unexpected error occurred while rendering this view. You can try refreshing or returning to the {'<ShopNest>'} home page.
             </p>
             {this.state.error?.message && (
               <pre style={{

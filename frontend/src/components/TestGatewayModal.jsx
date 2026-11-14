@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import api from '../api/axios';
 import useCart from '../hooks/useCart';
@@ -37,12 +37,30 @@ export default function TestGatewayModal({ order, isOpen, onClose, onSuccess, on
   const [errorCode, setErrorCode] = useState('');
   const [paymentResult, setPaymentResult] = useState(null);
 
-  // Sync amount when order changes
+  // Keep latest callbacks and order in refs so changes don't re-trigger initialization effects
+  const onErrorRef = useRef(onError);
+  const onSuccessRef = useRef(onSuccess);
+  const orderRef = useRef(order);
+  useEffect(() => {
+    onErrorRef.current = onError;
+    onSuccessRef.current = onSuccess;
+    orderRef.current = order;
+  });
+
+  const isInitiatingRef = useRef(false);
+  const initializedOrderIdRef = useRef(null);
+
+  // Sync amount and reset session state when order changes
   useEffect(() => {
     if (order?.total) {
       setAmountPaise(Math.round(order.total * 100));
     }
-  }, [order?.total]);
+    if (order?._id && initializedOrderIdRef.current !== order._id) {
+      setProviderOrderId(order.payment?.providerOrderId || '');
+      setErrorMessage('');
+      setErrorCode('');
+    }
+  }, [order?._id, order?.total, order?.payment?.providerOrderId]);
 
   // Lock body scroll and listen for Escape key while modal is open
   useEffect(() => {
@@ -64,16 +82,25 @@ export default function TestGatewayModal({ order, isOpen, onClose, onSuccess, on
     };
   }, [isOpen, step, onClose]);
 
+  const orderId = order?._id;
+  const paymentStatus = order?.payment?.status;
+
   const initProviderOrder = useCallback(async () => {
-    if (!order?._id) return;
+    if (!orderId) return;
     // Don't try to create a payment session for an already-paid or refunded order
-    if (order.payment?.status === 'paid' || order.payment?.status === 'refunded') return;
+    if (paymentStatus === 'paid' || paymentStatus === 'refunded') return;
+    // Don't initiate if already processing, succeeded, or already in flight
+    if (step === 'processing' || step === 'success' || isInitiatingRef.current) return;
+    if (initializedOrderIdRef.current === orderId && providerOrderId) return;
+
     try {
+      isInitiatingRef.current = true;
       setStep('init');
       setErrorMessage('');
-      const res = await api.post('/payments/create-order', { orderId: order._id });
+      const res = await api.post('/payments/create-order', { orderId });
       setProviderOrderId(res.data.providerOrderId);
       setAmountPaise(res.data.amount);
+      initializedOrderIdRef.current = orderId;
       setStep('ready');
     } catch (err) {
       const errorMsg =
@@ -82,26 +109,45 @@ export default function TestGatewayModal({ order, isOpen, onClose, onSuccess, on
         err.response?.data?.message ||
         err.message ||
         'Failed to initialize payment session.';
-      console.error('[Payment Flow] /payments/create-order failed for order ' + order._id + ':', {
-        orderId: order._id,
+
+      // If the backend indicates the order is already paid, complete successfully instead of showing an error
+      const isAlreadyPaidError =
+        typeof errorMsg === 'string' &&
+        (errorMsg.includes('payment status "paid"') || errorMsg.includes('payment status "PAID"'));
+
+      if (isAlreadyPaidError) {
+        setStep('success');
+        const latestOrder = orderRef.current;
+        onSuccessRef.current?.({
+          ...latestOrder,
+          payment: { ...(latestOrder?.payment || {}), status: 'paid' },
+        });
+        return;
+      }
+
+      console.error('[Payment Flow] /payments/create-order failed for order ' + orderId + ':', {
+        orderId,
         status: err.response?.status || err.status,
         error: errorMsg,
       });
       setErrorMessage(errorMsg);
       setStep('failure');
-      if (onError) {
-        onError(errorMsg);
-      }
+      onErrorRef.current?.(errorMsg);
+    } finally {
+      isInitiatingRef.current = false;
     }
-  }, [order?._id, order?.payment?.status, onError]);
+  }, [orderId, paymentStatus, providerOrderId, step]);
 
-  // Initialize or fetch provider order on modal open
+  // Initialize or fetch provider order once on modal open
   useEffect(() => {
-    if (!isOpen || !order?._id) return;
+    if (!isOpen || !orderId) return;
     // Skip if the order is already paid or refunded
-    if (order.payment?.status === 'paid' || order.payment?.status === 'refunded') return;
+    if (paymentStatus === 'paid' || paymentStatus === 'refunded') return;
+    if (step === 'processing' || step === 'success') return;
+    if (initializedOrderIdRef.current === orderId && providerOrderId) return;
+
     initProviderOrder();
-  }, [isOpen, order?._id, order?.payment?.status, initProviderOrder]);
+  }, [isOpen, orderId, paymentStatus, initProviderOrder, providerOrderId, step]);
 
   if (!isOpen) return null;
 
@@ -177,8 +223,15 @@ export default function TestGatewayModal({ order, isOpen, onClose, onSuccess, on
 
       setStep('success');
 
-      if (onSuccess) {
-        onSuccess(verifyRes.data.order);
+      // Clear customer cart state in background
+      try {
+        await fetchCart();
+      } catch {
+        // ignore background cart refresh failure
+      }
+
+      if (onSuccessRef.current) {
+        onSuccessRef.current(verifyRes.data.order);
       }
     } catch (err) {
       const resp = err.response?.data || err.data;
@@ -196,14 +249,15 @@ export default function TestGatewayModal({ order, isOpen, onClose, onSuccess, on
       setErrorCode(code);
       setErrorMessage(reason);
       setStep('failure');
-      if (onError) {
-        onError(reason);
+      if (onErrorRef.current) {
+        onErrorRef.current(reason);
       }
     }
   };
 
   const handleRetry = () => {
     if (!providerOrderId) {
+      initializedOrderIdRef.current = null;
       initProviderOrder();
     } else {
       setStep('ready');

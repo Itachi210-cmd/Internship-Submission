@@ -2,18 +2,48 @@ import { Client } from '@elastic/elasticsearch';
 import { env } from './env.js';
 
 /**
- * Elasticsearch official client instance
+ * Check if Elasticsearch is configured
  */
-export const esClient = new Client({
-  node: env.esNode,
-  maxRetries: 3,
-  requestTimeout: 10000,
-});
+export const isEsConfigured = Boolean(env.esNode && env.esNode.trim());
+
+let client = null;
+
+if (isEsConfigured) {
+  const clientOptions = {
+    node: env.esNode.trim(),
+    maxRetries: 3,
+    requestTimeout: 10000,
+  };
+
+  // Support Elastic Cloud with API Key or Username/Password
+  if (env.esApiKey && env.esApiKey.trim()) {
+    clientOptions.auth = { apiKey: env.esApiKey.trim() };
+  } else if (env.esUsername && env.esUsername.trim() && env.esPassword) {
+    clientOptions.auth = {
+      username: env.esUsername.trim(),
+      password: env.esPassword,
+    };
+  }
+
+  client = new Client(clientOptions);
+}
+
+/**
+ * Elasticsearch official client instance (null if unconfigured)
+ */
+export const esClient = client;
 
 /**
  * Health check helper for Elasticsearch
  */
 export const checkElasticsearchHealth = async () => {
+  if (!esClient) {
+    return {
+      status: 'disabled',
+      message: 'Elasticsearch not configured (using MongoDB fallback)',
+    };
+  }
+
   try {
     const health = await esClient.cluster.health();
     return {

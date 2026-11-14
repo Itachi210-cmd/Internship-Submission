@@ -57,7 +57,7 @@ export default function RegisterPage() {
               </svg>
             </div>
             <h1 className="stitch-auth-title">Create an Account</h1>
-            <p className="stitch-auth-subtitle">Join the multi-vendor marketplace as a customer</p>
+            <p className="stitch-auth-subtitle">Join {'<ShopNest>'} as a customer</p>
           </div>
 
           {error && (

@@ -2,10 +2,13 @@ import axios from 'axios';
 
 /**
  * Pre-configured Axios instance
- * Base URL configured from VITE_API_URL environment variable
+ * Base URL defaults to '/api' in production (proxied via vercel.json/netlify.toml rewrite)
+ * or 'http://localhost:5000/api' in local development.
  */
+const defaultBaseURL = import.meta.env.PROD ? '/api' : 'http://localhost:5000/api';
+
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:5000/api',
+  baseURL: import.meta.env.VITE_API_URL || defaultBaseURL,
   timeout: 10000,
   headers: {
     'Content-Type': 'application/json',

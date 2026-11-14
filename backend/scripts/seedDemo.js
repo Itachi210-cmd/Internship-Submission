@@ -186,12 +186,26 @@ function formatCategory(cat) {
 }
 
 async function runDemoSeed() {
-  console.log('--- Multi-Vendor Marketplace: Demo Products Seed ---');
+  console.log('--- <ShopNest> Multi-Vendor Platform: Demo Products Seed ---');
 
   // Guard: Must only run when ALLOW_DEMO_SEED=true
   if (process.env.ALLOW_DEMO_SEED !== 'true') {
     console.error('[seed:demo] Aborted: ALLOW_DEMO_SEED is not set to "true".');
     console.error('To run this seed script, please set ALLOW_DEMO_SEED=true in your .env file or environment.');
+    process.exit(1);
+  }
+
+  // Guard: Require --yes flag when connecting to a remote MongoDB database
+  const mongoUri = process.env.MONGO_URI || '';
+  const isLocalhost = mongoUri.includes('localhost') || mongoUri.includes('127.0.0.1');
+  const hasYesFlag = process.argv.includes('--yes');
+
+  if (!isLocalhost && !hasYesFlag) {
+    const maskedUri = mongoUri.replace(/:([^@]+)@/, ':****@');
+    console.error('[seed:demo] Aborted: You are attempting to run seed:demo against a remote MongoDB instance:');
+    console.error(`  ${maskedUri}`);
+    console.error('To run seed:demo against a remote database, you must supply the --yes flag.');
+    console.error('Example: npm run seed:demo -- --yes');
     process.exit(1);
   }
 
@@ -287,7 +301,7 @@ async function runDemoSeed() {
       const targetVendor = i < 8 ? vendor1 : vendor2;
 
       const title = String(item.title || `Demo Product ${i + 1}`).trim().slice(0, 120);
-      const description = String(item.description || 'High quality marketplace product with dependable specifications.').trim().slice(0, 2000);
+      const description = String(item.description || 'High quality <ShopNest> product with dependable specifications.').trim().slice(0, 2000);
       const price = toSensibleInrPrice(item.price);
       // Stock between 5 and 60
       const stock = Math.min(60, Math.max(5, typeof item.stock === 'number' ? (item.stock % 56) + 5 : 20));

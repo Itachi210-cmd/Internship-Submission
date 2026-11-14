@@ -10,6 +10,10 @@ import { ensureIndex, formatProductForES } from '../src/services/search.service.
  * Drops and recreates the index, then bulk-indexes all active products in batches of 500.
  */
 export const rebuildIndex = async (targetIndex = env.esIndex) => {
+  if (!esClient) {
+    throw new Error('Elasticsearch is not configured (ES_NODE is missing or empty). Please set ES_NODE and re-run.');
+  }
+
   console.log(`[Reindex] Starting full reindex for index '${targetIndex}'...`);
 
   // Ensure index is dropped and recreated with fresh mappings

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import api from '../api/axios';
 import useAuth from '../hooks/useAuth';
@@ -63,6 +63,11 @@ export default function MyOrdersPage() {
     }
   };
 
+  const handlePaymentError = useCallback((errMsg) => {
+    console.error('[Payment Flow] Payment failed on MyOrdersPage:', errMsg);
+    showToast(errMsg, 'error');
+  }, [showToast]);
+
   if (loading && orders.length === 0) {
     return (
       <div className="orders-page-container stitch-cart-loading">
@@ -116,7 +121,7 @@ export default function MyOrdersPage() {
             You haven't placed any orders yet. Discover high-quality products across our independent multi-vendor stores.
           </p>
           <Link to="/products" className="stitch-explore-btn">
-            Browse Marketplace
+            Browse {'<ShopNest>'}
           </Link>
         </div>
       ) : (
@@ -233,15 +238,12 @@ export default function MyOrdersPage() {
       {activePaymentOrder && (
         <TestGatewayModal
           order={activePaymentOrder}
-          isOpen={isGatewayOpen}
+          isOpen={isGatewayOpen && activePaymentOrder.payment?.status !== 'paid' && activePaymentOrder.payment?.status !== 'refunded'}
           onClose={() => {
             setIsGatewayOpen(false);
             setActivePaymentOrder(null);
           }}
-          onError={(errMsg) => {
-            console.error('[Payment Flow] Payment failed on MyOrdersPage:', errMsg);
-            showToast(errMsg, 'error');
-          }}
+          onError={handlePaymentError}
           onSuccess={(paidOrder) => {
             setOrders((prev) =>
               prev.map((o) => (o._id === paidOrder._id ? paidOrder : o))

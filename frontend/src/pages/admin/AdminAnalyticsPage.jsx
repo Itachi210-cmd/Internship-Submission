@@ -103,7 +103,7 @@ export default function AdminAnalyticsPage() {
       {/* Header & Controls */}
       <div className="stitch-admin-header">
         <div>
-          <span className="stitch-admin-control-badge">Marketplace Control Tower</span>
+          <span className="stitch-admin-control-badge">{'<ShopNest>'} Control Tower</span>
           <div className="stitch-admin-title-row">
             <h1 className="stitch-admin-title">Admin Analytics</h1>
           </div>
@@ -252,7 +252,7 @@ export default function AdminAnalyticsPage() {
               <div className="stitch-chart-card-header">
                 <div>
                   <h3 className="stitch-chart-title">Revenue &amp; Growth Trajectory</h3>
-                  <p className="stitch-chart-subtitle">Daily net marketplace turnover over selected timeframe</p>
+                  <p className="stitch-chart-subtitle">Daily net {'<ShopNest>'} turnover over selected timeframe</p>
                 </div>
                 <span className="stitch-chart-badge-primary">Net Revenue (₹)</span>
               </div>
@@ -554,7 +554,7 @@ export default function AdminAnalyticsPage() {
               <div className="stitch-payouts-card-header">
                 <div>
                   <h3 className="stitch-payouts-title">Top Vendors by Revenue</h3>
-                  <p className="stitch-payouts-desc">Highest marketplace sales volume</p>
+                  <p className="stitch-payouts-desc">Highest {'<ShopNest>'} sales volume</p>
                 </div>
               </div>
               {topVendors.length === 0 ? (

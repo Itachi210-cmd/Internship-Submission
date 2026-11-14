@@ -181,7 +181,7 @@ export default function ProductsPage() {
               </>
             ) : (
               <>
-                Marketplace Catalog <span className="title-count">({total})</span>
+                {'<ShopNest>'} Catalog <span className="title-count">({total})</span>
               </>
             )}
           </h1>

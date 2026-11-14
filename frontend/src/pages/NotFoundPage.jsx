@@ -19,10 +19,10 @@ export default function NotFoundPage() {
           Page Not Found
         </h1>
         <p className="stitch-empty-orders-desc" style={{ marginBottom: '1.75rem' }}>
-          The page you are looking for does not exist, has been moved, or is temporarily unavailable.
+          The page you are looking for does not exist on {'<ShopNest>'}, has been moved, or is temporarily unavailable.
         </p>
         <Link to="/" className="stitch-explore-btn">
-          Back to Home
+          Back to {'<ShopNest>'}
         </Link>
       </div>
     </div>

@@ -6,7 +6,7 @@ These rules are permanent and mandatory for any AI agent working in this reposit
 
 ## 1. Project Overview & Architecture
 
-- **Project:** Multi-vendor marketplace demo.
+- **Project:** <ShopNest> multi-vendor platform.
 - **Repository Structure (Monorepo):**
   - `backend/`: Node.js + Express, MongoDB, Redis, Elasticsearch, Supabase Storage via S3-compatible API, built-in sandbox payment gateway modeled on Razorpay Route.
   - `frontend/`: React + Vite, JavaScript, plain CSS with design tokens.

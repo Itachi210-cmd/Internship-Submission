@@ -12,10 +12,12 @@ export const getHealthStatus = async () => {
     checkElasticsearchHealth(),
   ]);
 
+  const esHealthy = elasticsearch.status === 'connected' || elasticsearch.status === 'disabled';
+
   const allConnected =
     mongo.status === 'connected' &&
     redis.status === 'connected' &&
-    elasticsearch.status === 'connected';
+    esHealthy;
 
   const anyConnected =
     mongo.status === 'connected' ||

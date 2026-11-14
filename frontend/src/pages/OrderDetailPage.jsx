@@ -543,7 +543,7 @@ export default function OrderDetailPage() {
       {order && (
         <TestGatewayModal
           order={order}
-          isOpen={isGatewayOpen}
+          isOpen={isGatewayOpen && order.payment?.status !== 'paid' && order.payment?.status !== 'refunded'}
           onClose={handleCloseGateway}
           onError={handlePaymentError}
           onSuccess={handlePaymentSuccess}

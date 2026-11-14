@@ -1,6 +1,6 @@
-# Design System — Multi-Vendor Marketplace
+# Design System — <ShopNest> Multi-Vendor Platform
 
-Extracted from the **"Multi-Vendor Marketplace Web"** Stitch project and cross-referenced with the existing `frontend/src/index.css` design tokens.
+Extracted from the **"<ShopNest> Web"** Stitch project and cross-referenced with the existing `frontend/src/index.css` design tokens.
 
 > **AGENTS.md is the source of truth for rules.** This document is a reference for *look and layout* only. See [`AGENTS.md`](./AGENTS.md) for mandatory constraints (plain CSS only, no Tailwind, no UI kits, no chart libraries, etc.).
 
@@ -12,7 +12,7 @@ The Stitch project contains **11 screens** (all desktop, 1280×n):
 
 | # | Screen Name | Covers |
 |---|---|---|
-| 1 | **Marketplace Home** | Hero, featured categories, product grid, footer |
+| 1 | **<ShopNest> Home** | Hero, featured categories, product grid, footer |
 | 2 | **Customer E-Commerce Flow** | Login, Register, search bar, account dropdown |
 | 3 | **Customer Product Listing & Detail** | Search results grid, filter sidebar, product detail page, reviews |
 | 4 | **Customer Shopping Cart & Checkout** | Cart summary, checkout form, order summary, payment section |

@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Multi-Vendor E-Commerce Marketplace - Plain CSS Design System
+   <ShopNest> Multi-Vendor Platform - Plain CSS Design System
    ========================================================================== */
 
 /* Google Fonts — Stitch design: Plus Jakarta Sans (headings) + Inter (body) */
@@ -1484,7 +1484,7 @@ button {
 }
 
 /* ==========================================================================
-   Stitch Hero & Marketplace Home (Multi-Vendor Marketplace Web)
+   Stitch Hero & <ShopNest> Home (<ShopNest> Web)
    ========================================================================== */
 
 .stitch-hero-section {
@@ -2176,7 +2176,7 @@ button {
 }
 
 /* ==========================================================================
-   Responsive Adaptations for Marketplace Home & Navigation
+   Responsive Adaptations for <ShopNest> Home & Navigation
    ========================================================================== */
 
 @media (max-width: 1100px) {
