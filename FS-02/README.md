@@ -240,9 +240,12 @@ node scripts/run_global_regression.mjs
 
 ---
 
-## Known Limitations
+##### Deployment Constraints & Production Notes
 
-- **Single-Instance SSE Tree Stream**: Page create/rename/delete SSE events (`/pages/events`) use an in-memory `EventEmitter` (`src/lib/events/workspace-events.ts`), so SSE works across clients connected to the same Next.js instance without Redis SSE bridging.
-- **In-Memory Rate Limiter**: HTTP route rate limiting (`src/lib/security/api-guard.ts`) stores sliding-window counters per Node.js process rather than in Redis.
-- **₹0 Cloud Tier Constraints**: Deploying on Render Free (`render.yaml`, `REDIS_ENABLED=false`) caps scaling to a single container instance and incurs ~30–60s cold starts after ~15 minutes of inactivity. No Redis server is provisioned on the ₹0 Render blueprint; enable Redis via `docker-compose.prod.yml` or an external Redis service if scaling horizontally.
-- **Database Migrations in Production Container**: The minimal runtime `Dockerfile` intentionally excludes Prisma CLI dev packages to keep image size small; run `npx prisma migrate deploy` from your workstation or CI/CD before starting or upgrading a production deployment.
+- **Single-Instance SSE Tree Stream:** Page create, rename, and delete events (`/pages/events`) use an in-memory `EventEmitter` (`src/lib/events/workspace-events.ts`). Events are delivered to clients connected to the same Next.js instance only. Cross-instance event delivery requires a shared event-broadcast mechanism.
+
+- **In-Memory Rate Limiter:** HTTP route rate limiting (`src/lib/security/api-guard.ts`) uses per-process sliding-window counters instead of Redis. Counters reset when the process restarts and are not shared across multiple instances.
+
+- **Render Deployment Constraints:** The current Render deployment uses a single application instance with `REDIS_ENABLED=false`. Free instances may experience cold starts after inactivity (often around 30–60 seconds, but timing can vary). Horizontal scaling requires shared infrastructure for rate limiting, SSE event distribution, and collaboration state.
+
+- **Production Database Migrations:** The minimal runtime `Dockerfile` excludes Prisma CLI development dependencies to keep the production image lightweight. Run `npx prisma migrate deploy` through CI/CD or a configured deployment environment with the appropriate production database connection before releasing schema changes.
