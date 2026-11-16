@@ -639,5 +639,27 @@ describe('Phase 7: Reviews, Coupons, Invoices & Admin Analytics', () => {
       expect(res.body.cached).toBe(true);
       expect(res.body.totals.revenue).toBe(9999);
     });
+
+    it('GET /api/admin/stats/pending returns pending vendor count for admin and enforces RBAC', async () => {
+      // 1. Unauthenticated request -> 401
+      const unauthRes = await request(app).get('/api/admin/stats/pending');
+      expect(unauthRes.status).toBe(401);
+
+      // 2. Customer request -> 403
+      const custRes = await request(app)
+        .get('/api/admin/stats/pending')
+        .set('Authorization', `Bearer ${tokenCustomerA}`);
+      expect(custRes.status).toBe(403);
+
+      // 3. Admin request -> 200 with pending count
+      jest.spyOn(Vendor, 'countDocuments').mockResolvedValue(3);
+      const adminRes = await request(app)
+        .get('/api/admin/stats/pending')
+        .set('Authorization', `Bearer ${tokenAdmin}`);
+
+      expect(adminRes.status).toBe(200);
+      expect(adminRes.body.success).toBe(true);
+      expect(adminRes.body.pendingVendors).toBe(3);
+    });
   });
 });

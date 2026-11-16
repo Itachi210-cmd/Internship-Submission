@@ -1,4 +1,10 @@
 {
+  "name": "shopnest",
+  "private": true,
+  "scripts": {
+    "check-screenshots": "node scripts/check-screenshots.js",
+    "generate-gallery": "node scripts/generate-readme-gallery.js"
+  },
   "dependencies": {
     "mongodb": "^7.9.0"
   }

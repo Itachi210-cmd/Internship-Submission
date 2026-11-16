@@ -83,7 +83,9 @@ export default function ProductDetailPage() {
 
   const images = product.images && product.images.length > 0
     ? product.images
-    : ['/placeholder.svg'];
+    : product.image
+      ? [product.image]
+      : ['/placeholder.svg'];
 
   const currentCover = selectedImage || images[0];
 

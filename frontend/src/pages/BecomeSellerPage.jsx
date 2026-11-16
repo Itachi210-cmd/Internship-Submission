@@ -92,7 +92,7 @@ export default function BecomeSellerPage() {
               <line x1="23" y1="11" x2="17" y2="11"></line>
             </svg>
           </div>
-          <h2 className="stitch-onboarding-unauth-title">Become a {'<ShopNest>'} Seller</h2>
+          <h2 className="stitch-onboarding-unauth-title">Become a ShopNest Seller</h2>
           <p className="stitch-onboarding-unauth-desc">
             Open a store to list products, reach shoppers across multiple categories, and manage fulfillment.
           </p>
@@ -138,7 +138,7 @@ export default function BecomeSellerPage() {
           <span className="stitch-profile-pretitle">Seller Onboarding &amp; Verification</span>
           <h1 className="stitch-onboarding-title">Store Onboarding Application</h1>
           <p className="stitch-onboarding-subtitle">
-            Launch your own multi-vendor storefront, list products, and reach thousands of {'<ShopNest>'} shoppers.
+            Launch your own multi-vendor storefront, list products, and reach thousands of ShopNest shoppers.
           </p>
         </div>
         <div className="stitch-profile-standard-pill">
@@ -146,7 +146,7 @@ export default function BecomeSellerPage() {
             <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z" />
           </svg>
           <div className="stitch-profile-standard-text">
-            <span className="stitch-profile-standard-title">{'<ShopNest>'} Standard</span>
+            <span className="stitch-profile-standard-title">ShopNest Standard</span>
             <span className="stitch-profile-standard-rate">
               Platform Commission: <strong>10%</strong>
             </span>
@@ -234,7 +234,7 @@ export default function BecomeSellerPage() {
               <div className="stitch-status-content">
                 <h4 className="stitch-status-title">Congratulations! Your Store is Approved</h4>
                 <p className="stitch-status-desc">
-                  Your store is fully activated on {'<ShopNest>'}. You can now manage your catalog, upload product images, and fulfill orders.
+                  Your store is fully activated on ShopNest. You can now manage your catalog, upload product images, and fulfill orders.
                 </p>
                 <div className="stitch-status-actions-cluster">
                   <Link to="/vendor/products" className="btn btn-primary">
@@ -264,7 +264,7 @@ export default function BecomeSellerPage() {
                   Your seller onboarding application was not approved. Feedback reason:
                 </p>
                 <div className="stitch-rejection-reason-box">
-                  "{vendorProfile.rejectionReason || 'Details provided did not meet <ShopNest> onboarding requirements.'}"
+                  "{vendorProfile.rejectionReason || 'Details provided did not meet ShopNest onboarding requirements.'}"
                 </div>
                 <div className="stitch-status-meta-row" style={{ marginTop: '1rem' }}>
                   <button
@@ -298,7 +298,7 @@ export default function BecomeSellerPage() {
             <div>
               <h2 className="stitch-onboarding-form-title">Vendor Store Application</h2>
               <p className="stitch-onboarding-form-desc">
-                Provide your store brand details below. Applications are reviewed by {'<ShopNest>'} administration.
+                Provide your store brand details below. Applications are reviewed by ShopNest administration.
               </p>
             </div>
           </div>
@@ -405,7 +405,7 @@ export default function BecomeSellerPage() {
                   </svg>
                 </div>
                 <div>
-                  <h4 className="stitch-commission-card-title">Default {'<ShopNest>'} Commission</h4>
+                  <h4 className="stitch-commission-card-title">Default ShopNest Commission</h4>
                   <p className="stitch-commission-card-desc">
                     Standard 10% platform commission retained upon checkout split payments.
                   </p>

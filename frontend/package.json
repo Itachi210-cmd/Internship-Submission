@@ -1,6 +1,6 @@
 {
   "name": "marketplace-frontend",
-  "description": "<ShopNest> React Frontend",
+  "description": "ShopNest React Frontend",
   "private": true,
   "version": "1.0.0",
   "type": "module",

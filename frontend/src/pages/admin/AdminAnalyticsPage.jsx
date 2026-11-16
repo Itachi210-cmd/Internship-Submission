@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import api from '../../api/axios';
 import useAuth from '../../hooks/useAuth';
 
@@ -6,6 +7,7 @@ export default function AdminAnalyticsPage() {
   const { user } = useAuth();
   const [range, setRange] = useState('7d');
   const [data, setData] = useState(null);
+  const [pendingVendors, setPendingVendors] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [hoveredPoint, setHoveredPoint] = useState(null);
@@ -18,11 +20,24 @@ export default function AdminAnalyticsPage() {
     setLoading(true);
     setError('');
     try {
-      const res = await api.get(`/admin/analytics?range=${selectedRange}`);
-      setData(res.data);
-    } catch (err) {
-      if (!err?.isCanceled) {
-        setError(err.response?.data?.message || 'Failed to fetch analytics');
+      const [analyticsRes, pendingRes] = await Promise.allSettled([
+        api.get(`/admin/analytics?range=${selectedRange}`),
+        api.get('/admin/vendors?status=pending&limit=1'),
+      ]);
+
+      if (analyticsRes.status === 'fulfilled') {
+        setData(analyticsRes.value.data);
+      } else {
+        const err = analyticsRes.reason;
+        if (!err?.isCanceled) {
+          setError(err?.response?.data?.message || 'Failed to fetch analytics');
+        }
+      }
+
+      if (pendingRes.status === 'fulfilled') {
+        const pData = pendingRes.value.data;
+        const count = pData.pagination?.total ?? (pData.vendors ? pData.vendors.length : 0);
+        setPendingVendors(count);
       }
     } finally {
       setLoading(false);
@@ -101,14 +116,39 @@ export default function AdminAnalyticsPage() {
   return (
     <div className="stitch-admin-analytics-container">
       {/* Header & Controls */}
+      {/* Highlighted Seller Requests Card */}
+      <div className={`stitch-admin-pending-alert-card ${pendingVendors > 0 ? 'has-pending' : 'no-pending'}`}>
+        <div className="stitch-pending-alert-left">
+          <div className="stitch-pending-alert-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+              <circle cx="8.5" cy="7.5" r="4" />
+              <polyline points="17 11 19 13 23 9" />
+            </svg>
+          </div>
+          <div>
+            <h3 className="stitch-pending-alert-title">
+              {pendingVendors > 0 ? `Seller requests: ${pendingVendors} pending` : 'No pending requests'}
+            </h3>
+            <p className="stitch-pending-alert-desc">
+              {pendingVendors > 0
+                ? 'Store onboarding applications are waiting for compliance review and approval.'
+                : 'All incoming seller applications have been reviewed.'}
+            </p>
+          </div>
+        </div>
+        <Link to="/admin/vendors?status=pending" className="btn btn-primary stitch-pending-alert-btn">
+          Review requests ➔
+        </Link>
+      </div>
+
       <div className="stitch-admin-header">
         <div>
-          <span className="stitch-admin-control-badge">{'<ShopNest>'} Control Tower</span>
           <div className="stitch-admin-title-row">
             <h1 className="stitch-admin-title">Admin Analytics</h1>
           </div>
           <p className="stitch-admin-subtitle">
-            Aggregated revenue (minus refunds), platform commissions (excluding reversed payouts), timeseries, and product metrics.
+            Revenue, orders and top sellers for the selected period.
           </p>
         </div>
 
@@ -161,7 +201,7 @@ export default function AdminAnalyticsPage() {
                 ₹{totals.revenue.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
               </div>
               <div className="stitch-kpi-footer">
-                <span className="stitch-kpi-badge-settled">Paid - Refunded</span>
+                <span className="stitch-kpi-badge-settled">After refunds</span>
               </div>
             </div>
 
@@ -181,7 +221,7 @@ export default function AdminAnalyticsPage() {
                 ₹{totals.commission.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
               </div>
               <div className="stitch-kpi-footer">
-                <span className="stitch-kpi-subtext">Retained platform split</span>
+                <span className="stitch-kpi-subtext">Platform commission</span>
               </div>
             </div>
 
@@ -252,7 +292,7 @@ export default function AdminAnalyticsPage() {
               <div className="stitch-chart-card-header">
                 <div>
                   <h3 className="stitch-chart-title">Revenue &amp; Growth Trajectory</h3>
-                  <p className="stitch-chart-subtitle">Daily net {'<ShopNest>'} turnover over selected timeframe</p>
+                  <p className="stitch-chart-subtitle">Daily net ShopNest turnover over selected timeframe</p>
                 </div>
                 <span className="stitch-chart-badge-primary">Net Revenue (₹)</span>
               </div>
@@ -313,37 +353,61 @@ export default function AdminAnalyticsPage() {
                     />
                   )}
 
-                  {/* Points & Hover Circles */}
-                  {revenuePoints.map((p, idx) => (
-                    <g key={idx}>
-                      <circle
-                        cx={p.x}
-                        cy={p.y}
-                        r="3.5"
-                        fill="var(--color-surface)"
-                        stroke="var(--color-primary-light)"
-                        strokeWidth="2"
-                        onMouseEnter={() =>
-                          setHoveredPoint({ ...p, type: 'revenue' })
-                        }
-                        onMouseLeave={() => setHoveredPoint(null)}
-                        style={{ cursor: 'pointer' }}
-                      />
-                      {(dailySeries.length <= 10 ||
-                        idx % Math.ceil(dailySeries.length / 7) === 0 ||
-                        idx === dailySeries.length - 1) && (
-                        <text
-                          x={p.x}
-                          y={chartHeight - 12}
-                          textAnchor="middle"
-                          fontSize="8.5"
-                          fill="var(--color-text-muted)"
-                        >
-                          {p.date.slice(5)}
-                        </text>
-                      )}
-                    </g>
-                  ))}
+                  {/* Points & Hover Circles - hidden by default, visible on hover/focus */}
+                  {revenuePoints.map((p, idx) => {
+                    const isHovered = hoveredPoint?.idx === idx && hoveredPoint?.type === 'revenue';
+                    const totalDays = dailySeries.length;
+                    const showLabel =
+                      totalDays <= 10
+                        ? true
+                        : totalDays > 30
+                        ? idx % Math.ceil(totalDays / 5) === 0 || idx === totalDays - 1
+                        : idx % Math.ceil(totalDays / 8) === 0 || idx === totalDays - 1;
+
+                    return (
+                      <g key={idx}>
+                        {isHovered && (
+                          <circle
+                            cx={p.x}
+                            cy={p.y}
+                            r="4.5"
+                            fill="var(--color-surface)"
+                            stroke="var(--color-primary-light)"
+                            strokeWidth="2.5"
+                            pointerEvents="none"
+                          />
+                        )}
+                        <circle
+                          cx={p.x}
+                          cy={p.y}
+                          r="12"
+                          fill="transparent"
+                          tabIndex={0}
+                          aria-label={`${p.date}: ₹${p.val.toLocaleString()}`}
+                          onMouseEnter={() =>
+                            setHoveredPoint({ ...p, idx, type: 'revenue' })
+                          }
+                          onMouseLeave={() => setHoveredPoint(null)}
+                          onFocus={() =>
+                            setHoveredPoint({ ...p, idx, type: 'revenue' })
+                          }
+                          onBlur={() => setHoveredPoint(null)}
+                          style={{ cursor: 'pointer', outline: 'none' }}
+                        />
+                        {showLabel && (
+                          <text
+                            x={p.x}
+                            y={chartHeight - 12}
+                            textAnchor="middle"
+                            fontSize="8.5"
+                            fill="var(--color-text-muted)"
+                          >
+                            {p.date.slice(5)}
+                          </text>
+                        )}
+                      </g>
+                    );
+                  })}
 
                   {/* Tooltip */}
                   {hoveredPoint && hoveredPoint.type === 'revenue' && (
@@ -416,21 +480,29 @@ export default function AdminAnalyticsPage() {
                     );
                   })}
 
-                  {/* SVG Bars (Aqua) */}
+                  {/* SVG Bars (Aqua) - focusable with thinned labels for >30d */}
                   {dailySeries.map((d, i) => {
+                    const totalDays = dailySeries.length;
                     const barWidth = Math.max(
-                      6,
-                      Math.min(24, (graphWidth / dailySeries.length) * 0.6)
+                      3,
+                      Math.min(24, (graphWidth / totalDays) * (totalDays > 30 ? 0.75 : 0.6))
                     );
                     const x =
                       padding.left +
-                      (i / Math.max(1, dailySeries.length)) * graphWidth +
-                      (graphWidth / dailySeries.length - barWidth) / 2;
+                      (i / Math.max(1, totalDays)) * graphWidth +
+                      (graphWidth / totalDays - barWidth) / 2;
                     const barHeight =
                       maxOrders > 0
                         ? (d.orders / maxOrders) * graphHeight
                         : 0;
                     const y = padding.top + graphHeight - barHeight;
+
+                    const showLabel =
+                      totalDays <= 10
+                        ? true
+                        : totalDays > 30
+                        ? i % Math.ceil(totalDays / 5) === 0 || i === totalDays - 1
+                        : i % Math.ceil(totalDays / 8) === 0 || i === totalDays - 1;
 
                     return (
                       <g key={i}>
@@ -442,16 +514,20 @@ export default function AdminAnalyticsPage() {
                           rx="3"
                           fill="var(--color-accent)"
                           opacity="0.88"
+                          tabIndex={0}
+                          aria-label={`${d.date}: ${d.orders} orders`}
                           onMouseEnter={() =>
                             setHoveredPoint({ x: x + barWidth / 2, y, val: d.orders, date: d.date, type: 'orders' })
                           }
                           onMouseLeave={() => setHoveredPoint(null)}
-                          style={{ cursor: 'pointer' }}
+                          onFocus={() =>
+                            setHoveredPoint({ x: x + barWidth / 2, y, val: d.orders, date: d.date, type: 'orders' })
+                          }
+                          onBlur={() => setHoveredPoint(null)}
+                          style={{ cursor: 'pointer', outline: 'none' }}
                         />
 
-                        {(dailySeries.length <= 10 ||
-                          i % Math.ceil(dailySeries.length / 7) === 0 ||
-                          i === dailySeries.length - 1) && (
+                        {showLabel && (
                           <text
                             x={x + barWidth / 2}
                             y={chartHeight - 12}
@@ -554,7 +630,7 @@ export default function AdminAnalyticsPage() {
               <div className="stitch-payouts-card-header">
                 <div>
                   <h3 className="stitch-payouts-title">Top Vendors by Revenue</h3>
-                  <p className="stitch-payouts-desc">Highest {'<ShopNest>'} sales volume</p>
+                  <p className="stitch-payouts-desc">Highest ShopNest sales volume</p>
                 </div>
               </div>
               {topVendors.length === 0 ? (

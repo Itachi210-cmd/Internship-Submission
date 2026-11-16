@@ -4,6 +4,7 @@ import useAuth from '../hooks/useAuth';
 import useCart from '../hooks/useCart';
 import useTheme from '../hooks/useTheme';
 import api from '../api/axios';
+import { BRAND_NAME } from '../constants/brand';
 
 export default function Navbar() {
   const location = useLocation();
@@ -20,6 +21,51 @@ export default function Navbar() {
   const [isLoadingSuggest, setIsLoadingSuggest] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
+  const [pendingVendorsCount, setPendingVendorsCount] = useState(0);
+
+  // Admin: fetch pending vendor request count (route change + every 60s when visible)
+  useEffect(() => {
+    if (user?.role !== 'admin') {
+      setPendingVendorsCount(0);
+      return;
+    }
+
+    let isMounted = true;
+
+    const fetchPendingCount = async () => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+        return;
+      }
+
+      try {
+        const res = await api.get('/admin/vendors?status=pending&limit=1');
+        if (isMounted && res.data) {
+          const count = res.data.pagination?.total ?? (res.data.vendors ? res.data.vendors.length : 0);
+          setPendingVendorsCount(count);
+        }
+      } catch {
+        // Silently ignore errors - never display error to admin
+      }
+    };
+
+    fetchPendingCount();
+
+    const interval = setInterval(fetchPendingCount, 60000);
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        fetchPendingCount();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [user?.role, location.pathname]);
 
   const searchContainerRef = useRef(null);
   const mobileMenuRef = useRef(null);
@@ -173,7 +219,7 @@ export default function Navbar() {
       <div className="navbar-container">
         <Link to="/" className="nav-brand">
           <div className="brand-icon">S</div>
-          <span className="brand-name">{'<ShopNest>'}</span>
+          <span className="brand-name">{BRAND_NAME}</span>
         </Link>
 
         {/* Global Navbar Autocomplete Search Bar */}
@@ -292,7 +338,12 @@ export default function Navbar() {
                   to="/admin/analytics"
                   className={`nav-link ${location.pathname.startsWith('/admin') ? 'active' : ''}`}
                 >
-                  Admin Panel
+                  <span>Admin Panel</span>
+                  {pendingVendorsCount > 0 && (
+                    <span className="stitch-nav-count-badge" title={`${pendingVendorsCount} pending vendor requests`}>
+                      {pendingVendorsCount}
+                    </span>
+                  )}
                 </Link>
               </li>
             )}

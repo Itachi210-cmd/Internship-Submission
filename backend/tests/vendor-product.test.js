@@ -76,7 +76,7 @@ describe('Phase 3: Vendor & Product APIs and S3 Uploads', () => {
     stock: 25,
     category: 'Electronics',
     tags: ['audio', 'gaming'],
-    images: ['http://localhost:9000/marketplace-images/products/img1.jpg'],
+    images: ['https://images.unsplash.com/photo-1599669454699-248893623440?w=800&fit=crop'],
     isActive: true,
     save: jest.fn().mockResolvedValue(true),
   };
@@ -223,7 +223,7 @@ describe('Phase 3: Vendor & Product APIs and S3 Uploads', () => {
           stock: 25,
           category: 'Electronics',
           tags: ['audio', 'gaming'],
-          images: ['http://localhost:9000/marketplace-images/products/img1.jpg'],
+          images: ['https://images.unsplash.com/photo-1599669454699-248893623440?w=800&fit=crop'],
         });
 
       expect(res.status).toBe(201);

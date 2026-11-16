@@ -25,7 +25,7 @@ if (!commitHash) {
  */
 router.get('/', (req, res) => {
   res.status(200).json({
-    name: '<ShopNest> Multi-Vendor E-Commerce Platform',
+    name: 'ShopNest Multi-Vendor E-Commerce Platform',
     version: '1.0.0',
     commit: commitHash,
     nodeEnv: env.nodeEnv,

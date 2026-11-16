@@ -400,7 +400,7 @@ export default function VendorProductsPage() {
                       <td>
                         <div className="stitch-table-product-cell">
                           <img
-                            src={product.images && product.images.length > 0 ? product.images[0] : '/placeholder.svg'}
+                            src={product.images && product.images.length > 0 ? product.images[0] : (product.image || '/placeholder.svg')}
                             alt={product.title}
                             className="stitch-table-thumb"
                             onError={(e) => {

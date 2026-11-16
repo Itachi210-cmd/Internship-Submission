@@ -69,7 +69,7 @@ export default function CartPage() {
           </div>
           <h2 className="stitch-empty-cart-title">Your Cart is Empty</h2>
           <p className="stitch-empty-cart-desc">
-            Looks like you haven't added anything to your cart yet. Explore curated products across {'<ShopNest>'}!
+            Looks like you haven't added anything to your cart yet. Explore curated products across ShopNest!
           </p>
           <Link to="/products" className="stitch-explore-btn">
             Explore Products

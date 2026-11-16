@@ -64,7 +64,7 @@ export default function AdminOrdersPage() {
           <span className="stitch-admin-control-badge">Order Settlement &amp; Fulfillment</span>
           <h1 className="stitch-admin-title">Platform Orders &amp; Split Transfers</h1>
           <p className="stitch-admin-subtitle">
-            Overview of all {'<ShopNest>'} customer transactions, vendor split payouts, and payments.
+            Overview of all ShopNest customer transactions, vendor split payouts, and payments.
           </p>
         </div>
 

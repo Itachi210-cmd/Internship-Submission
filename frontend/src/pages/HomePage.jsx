@@ -43,7 +43,7 @@ export default function HomePage() {
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
                 </svg>
-                <span>{'<ShopNest>'}</span>
+                <span>ShopNest</span>
               </div>
 
               <h1 className="stitch-hero-title">
@@ -125,7 +125,7 @@ export default function HomePage() {
               ) : featuredProducts.length > 0 ? (
                 <div className="stitch-hero-products-grid">
                   {featuredProducts.slice(0, 4).map((p) => {
-                    const imgUrl = (p.images && p.images[0]) || '/placeholder.svg';
+                    const imgUrl = (p.images && p.images[0]) || p.image || '/placeholder.svg';
                     return (
                       <Link
                         key={p._id}

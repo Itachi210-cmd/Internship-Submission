@@ -28,6 +28,7 @@ import reviewRoutes from './routes/review.routes.js';
 import couponRoutes from './routes/coupon.routes.js';
 import adminCouponRoutes from './routes/admin.coupon.routes.js';
 import adminAnalyticsRoutes from './routes/admin.analytics.routes.js';
+import adminStatsRoutes from './routes/admin.stats.routes.js';
 import { handleWebhook } from './controllers/payment.controller.js';
 
 const app = express();
@@ -102,6 +103,7 @@ app.use('/api/reviews', reviewRoutes);
 app.use('/api/coupons', couponRoutes);
 app.use('/api/admin/coupons', adminCouponRoutes);
 app.use('/api/admin/analytics', adminAnalyticsRoutes);
+app.use('/api/admin/stats', adminStatsRoutes);
 
 // 404 & Global Error Handler
 app.use(notFoundHandler);

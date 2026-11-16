@@ -227,7 +227,7 @@ export default function AdminCouponsPage() {
         <div className="stitch-payouts-table-card">
           <div className="stitch-payouts-card-header">
             <div>
-              <h3 className="stitch-payouts-title">Active {'<ShopNest>'} Coupons</h3>
+              <h3 className="stitch-payouts-title">Active ShopNest Coupons</h3>
               <p className="stitch-payouts-desc">Promotional voucher campaign management</p>
             </div>
             <span className="stitch-payouts-count-badge">

@@ -1,3 +1,4 @@
+import path from 'path';
 import mongoose from 'mongoose';
 import { env } from '../src/config/env.js';
 import { connectDB } from '../src/config/db.js';
@@ -86,6 +87,6 @@ const run = async () => {
 };
 
 // Check if executed directly
-if (process.argv[1] && process.argv[1].endsWith('reindex.js')) {
+if (process.argv[1] && path.basename(process.argv[1]) === 'reindex.js') {
   run();
 }

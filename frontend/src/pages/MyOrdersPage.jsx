@@ -121,7 +121,7 @@ export default function MyOrdersPage() {
             You haven't placed any orders yet. Discover high-quality products across our independent multi-vendor stores.
           </p>
           <Link to="/products" className="stitch-explore-btn">
-            Browse {'<ShopNest>'}
+            Browse ShopNest
           </Link>
         </div>
       ) : (

@@ -186,7 +186,7 @@ function formatCategory(cat) {
 }
 
 async function runDemoSeed() {
-  console.log('--- <ShopNest> Multi-Vendor Platform: Demo Products Seed ---');
+  console.log('--- ShopNest Multi-Vendor Platform: Demo Products Seed ---');
 
   // Guard: Must only run when ALLOW_DEMO_SEED=true
   if (process.env.ALLOW_DEMO_SEED !== 'true') {
@@ -301,7 +301,7 @@ async function runDemoSeed() {
       const targetVendor = i < 8 ? vendor1 : vendor2;
 
       const title = String(item.title || `Demo Product ${i + 1}`).trim().slice(0, 120);
-      const description = String(item.description || 'High quality <ShopNest> product with dependable specifications.').trim().slice(0, 2000);
+      const description = String(item.description || 'High quality ShopNest product with dependable specifications.').trim().slice(0, 2000);
       const price = toSensibleInrPrice(item.price);
       // Stock between 5 and 60
       const stock = Math.min(60, Math.max(5, typeof item.stock === 'number' ? (item.stock % 56) + 5 : 20));

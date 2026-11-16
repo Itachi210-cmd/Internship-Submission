@@ -212,13 +212,13 @@ export default function RegisterPage() {
                     <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6" />
                   </svg>
                 </div>
-                <span className="stitch-brand-wordmark">{'<ShopNest>'}</span>
+                <span className="stitch-brand-wordmark">ShopNest</span>
               </div>
 
               {/* Welcome text */}
               <div className="stitch-brand-copy">
                 <h2 className="stitch-brand-headline">
-                  {accountType === 'sell' ? 'Open your store' : 'Join <ShopNest>'}
+                  {accountType === 'sell' ? 'Open your store' : 'Join ShopNest'}
                 </h2>
                 <p className="stitch-brand-subheadline">
                   {accountType === 'sell'
@@ -285,12 +285,12 @@ export default function RegisterPage() {
                   <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6" />
                 </svg>
               </div>
-              <span className="stitch-brand-wordmark-mobile">{'<ShopNest>'}</span>
+              <span className="stitch-brand-wordmark-mobile">ShopNest</span>
             </div>
 
             <div className="stitch-form-intro">
               <h1 className="stitch-form-title">Create an Account</h1>
-              <p className="stitch-form-subtitle">Choose your goal to get started with {'<ShopNest>'}</p>
+              <p className="stitch-form-subtitle">Choose your goal to get started with ShopNest</p>
             </div>
 
             {/* Accessible Two-Option Selector: Shop vs Sell */}

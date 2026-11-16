@@ -1,6 +1,6 @@
-# <ShopNest> Production Deployment Guide (Free-Tier Stack)
+# ShopNest Production Deployment Guide (Free-Tier Stack)
 
-This guide documents the complete end-to-end procedure for deploying **<ShopNest>** using free-tier cloud infrastructure:
+This guide documents the complete end-to-end procedure for deploying **ShopNest** using free-tier cloud infrastructure:
 - **Frontend:** Vercel (or Netlify)
 - **Backend:** Render (Free Web Service)
 - **Database:** MongoDB Atlas (M0 Free Tier)
@@ -231,7 +231,7 @@ ALLOW_DEMO_SEED=true npm run seed:demo -- --yes
 
 ## 9. Step 8: Optional Elastic Cloud Setup
 
-Elasticsearch is **100% optional**. If `ES_NODE` is left empty, <ShopNest> automatically uses MongoDB regex and text indexes for catalog searches and autocomplete suggestions without degrading app availability.
+Elasticsearch is **100% optional**. If `ES_NODE` is left empty, ShopNest automatically uses MongoDB regex and text indexes for catalog searches and autocomplete suggestions without degrading app availability.
 
 To enable Elastic Cloud (e.g. 14-day free trial):
 1. Sign up at [cloud.elastic.co](https://cloud.elastic.co/).
@@ -265,7 +265,7 @@ To enable Elastic Cloud (e.g. 14-day free trial):
 ### 1. Render Free Tier Cold Starts (~50s delay)
 - **Symptom:** The first request after 15 minutes of inactivity takes 45–60 seconds to respond.
 - **Cause:** Render free tier spins down idle web services.
-- **Solution:** <ShopNest> includes a fire-and-forget warm-up ping in `main.jsx` (`fetch(`${VITE_BACKEND_URL}/api/health`, { mode: 'no-cors' })`) that fires immediately when any visitor lands on the frontend, waking up the instance before they click through to auth or checkout.
+- **Solution:** ShopNest includes a fire-and-forget warm-up ping in `main.jsx` (`fetch(`${VITE_BACKEND_URL}/api/health`, { mode: 'no-cors' })`) that fires immediately when any visitor lands on the frontend, waking up the instance before they click through to auth or checkout.
 
 ### 2. CORS Errors (`Origin ... not allowed by CORS`)
 - **Symptom:** Browser console shows `CORS policy: No 'Access-Control-Allow-Origin' header is present`.
