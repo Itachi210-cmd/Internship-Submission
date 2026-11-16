@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
 import Navbar from './Navbar';
 import Footer from './Footer';
+import SellerApplicationBanner from './SellerApplicationBanner';
 
 export default function Layout({ children }) {
   const location = useLocation();
@@ -39,6 +40,7 @@ export default function Layout({ children }) {
   return (
     <div className="app-container">
       <Navbar />
+      <SellerApplicationBanner />
       <main className="main-content">{children}</main>
       <Footer />
     </div>

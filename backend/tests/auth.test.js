@@ -78,6 +78,31 @@ describe('Auth & RBAC API Endpoints', () => {
       expect(res.headers['set-cookie']).toBeDefined();
     });
 
+    it('should ignore client-supplied role and force customer role', async () => {
+      jest.spyOn(User, 'findOne').mockResolvedValue(null);
+      const createSpy = jest.spyOn(User, 'create').mockResolvedValue({
+        ...mockCustomer,
+        toJSON: mockCustomer.toJSON,
+      });
+
+      const res = await request(app)
+        .post('/api/auth/register')
+        .send({
+          name: 'Privilege Escalation Attempt',
+          email: 'attacker@example.com',
+          password: 'Password@123',
+          role: 'admin',
+        });
+
+      expect(res.status).toBe(201);
+      expect(createSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          role: 'customer',
+        })
+      );
+      expect(res.body.user.role).toBe('customer');
+    });
+
     it('should reject registration if email is duplicate (409 Conflict)', async () => {
       jest.spyOn(User, 'findOne').mockResolvedValue(mockCustomer);
 

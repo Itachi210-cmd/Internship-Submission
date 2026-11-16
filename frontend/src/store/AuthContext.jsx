@@ -97,6 +97,30 @@ export const AuthProvider = ({ children }) => {
   };
 
   /**
+   * Refresh current user profile & tokens from server
+   */
+  const refreshUser = useCallback(async () => {
+    try {
+      const response = await api.post('/auth/refresh');
+      if (response?.data?.user) {
+        setAuthSession(response.data.user, response.data.accessToken);
+        return response.data.user;
+      }
+    } catch {
+      try {
+        const meRes = await api.get('/auth/me');
+        if (meRes?.data?.user) {
+          setUser(meRes.data.user);
+          return meRes.data.user;
+        }
+      } catch {
+        // Silent failure if offline or unauthenticated
+      }
+    }
+    return null;
+  }, [setAuthSession]);
+
+  /**
    * Log out user and clean up all state
    */
   const logout = async () => {
@@ -118,6 +142,7 @@ export const AuthProvider = ({ children }) => {
     isAuthenticated: Boolean(user && accessToken),
     login,
     register,
+    refreshUser,
     logout,
   };
 

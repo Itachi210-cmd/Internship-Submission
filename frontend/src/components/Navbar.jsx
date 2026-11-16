@@ -253,7 +253,7 @@ export default function Navbar() {
             {!user && (
               <li>
                 <Link
-                  to="/become-seller"
+                  to="/register?type=sell"
                   className={`nav-link ${location.pathname === '/become-seller' ? 'active' : ''}`}
                 >
                   Become a Seller
@@ -570,7 +570,7 @@ export default function Navbar() {
             {/* Guest Mobile Links */}
             {!user && (
               <li>
-                <Link to="/become-seller" className={`mobile-nav-link ${location.pathname === '/become-seller' ? 'active' : ''}`} onClick={() => setMobileMenuOpen(false)}>
+                <Link to="/register?type=sell" className={`mobile-nav-link ${location.pathname === '/become-seller' ? 'active' : ''}`} onClick={() => setMobileMenuOpen(false)}>
                   Become a Seller
                 </Link>
               </li>

@@ -33,6 +33,8 @@
    - [End-to-End Order & Split Payment Lifecycle](#end-to-end-order--split-payment-lifecycle)
 5. [Project Folder Structure](#5-project-folder-structure)
 6. [Screenshots](#6-screenshots)
+   - [Platform Overview](#61-platform-overview)
+   - [Vendor Module Workflows](#62-vendor-module-workflows)
 7. [Installation and Local Setup](#7-installation-and-local-setup)
    - [Prerequisites](#prerequisites)
    - [Step 1: Clone Repository](#step-1-clone-repository)
@@ -315,8 +317,14 @@ Multi-Vendor-E-Commerce-Marketplace/
 │       ├── products.png
 │       ├── cart.png
 │       ├── orders.png
+│       ├── admin-dashboard.png
+│       ├── vendor-application.png
 │       ├── vendor-dashboard.png
-│       └── admin-dashboard.png
+│       ├── vendor-products.png
+│       ├── vendor-add-edit-product.png
+│       ├── vendor-orders.png
+│       ├── vendor-earnings.png
+│       └── vendor-profile.png
 ├── backend/                    # Node.js + Express API Backend
 │   ├── .env.example            # Backend environment template
 │   ├── package.json            # Backend dependencies & scripts
@@ -482,7 +490,9 @@ Multi-Vendor-E-Commerce-Marketplace/
 ## 6. Screenshots
 
 > [!NOTE]
-> The screenshots below reference the designated documentation assets in `docs/screenshots/`. To populate these views in your fork or local environment, capture screenshots from your browser and place the PNG image files in the `docs/screenshots/` directory matching the specified filenames.
+> The screenshots below reference the designated documentation assets in `docs/screenshots/`. To populate these views in your local environment, capture screenshots from your browser and place the PNG image files in the `docs/screenshots/` directory matching the specified filenames.
+
+### 6.1 Platform Overview
 
 | Marketplace Home | Customer Login |
 |:---:|:---:|
@@ -494,15 +504,102 @@ Multi-Vendor-E-Commerce-Marketplace/
 | ![Product Catalog](docs/screenshots/products.png) | ![Shopping Cart](docs/screenshots/cart.png) |
 | *Real-time faceted filtering by category, price, rating & stock* | *Multi-vendor cart with live price/stock hydration* |
 
-| Order Tracking & Invoices | Vendor Studio Dashboard |
+| Customer Orders & Invoices | Administrator Portal |
 |:---:|:---:|
-| ![Customer Orders](docs/screenshots/orders.png) | ![Vendor Dashboard](docs/screenshots/vendor-dashboard.png) |
-| *Fulfillment timeline with downloadable PDF invoices* | *Vendor catalog management, fulfillment & payout metrics* |
+| ![Customer Orders](docs/screenshots/orders.png) | ![Admin Dashboard](docs/screenshots/admin-dashboard.png) |
+| *Fulfillment timeline with downloadable PDF invoices* | *Platform governance, merchant approvals, payouts & revenue analytics* |
 
-| Administrator Portal |
+---
+
+### 6.2 Vendor Module Workflows
+
+This section documents the dedicated screens and operational workflows implemented for the **Vendor Module**.
+
+#### 1. Vendor Registration & Application
+- **Route:** `/become-seller`
+- **Source Component:** `frontend/src/pages/BecomeSellerPage.jsx`
+- **Features Displayed:** Merchant onboarding form allowing customers to apply for seller status. Displays store name input, store description, logo URL upload, terms agreement, and real-time status banners (`pending`, `approved`, or `rejected`).
+
+| Vendor Onboarding & Application |
 |:---:|
-| ![Admin Dashboard](docs/screenshots/admin-dashboard.png) |
-| *Platform governance, merchant approvals, payouts & revenue analytics* |
+| ![Vendor Registration & Application](docs/screenshots/vendor-application.png) |
+| *Figure 6.1: Merchant application form with store configuration and live status indicator* |
+
+#### 2. Vendor Dashboard & Hub
+- **Route:** `/vendor` $\to$ `/vendor/products`
+- **Source Component:** `frontend/src/pages/vendor/VendorLayout.jsx`
+- **Features Displayed:** Centralized vendor navigation layout featuring store identity badge, sidebar tabs (Products, Orders, Earnings & Payouts, Store Profile), and quick return link to the marketplace.
+
+| Vendor Dashboard & Navigation Hub |
+|:---:|
+| ![Vendor Dashboard](docs/screenshots/vendor-dashboard.png) |
+| *Figure 6.2: Vendor Studio navigation hub with active module tabs and store header* |
+
+#### 3. Product Catalog Management
+- **Route:** `/vendor/products`
+- **Source Component:** `frontend/src/pages/vendor/VendorProductsPage.jsx`
+- **Features Displayed:** Product inventory table displaying primary image thumbnails, title, category, price in INR, real-time integer stock levels, status badges (`Active` / `Inactive`), real-time search input, category filter dropdown, and action buttons (Edit, Soft Delete).
+
+| Product Catalog Management |
+|:---:|
+| ![Product Management](docs/screenshots/vendor-products.png) |
+| *Figure 6.3: Vendor product catalog table with search filtering, stock quantities, and listing actions* |
+
+#### 4. Add & Edit Product Modal
+- **Route:** `/vendor/products` (Modal Dialog)
+- **Source Component:** `frontend/src/pages/vendor/VendorProductsPage.jsx`
+- **Features Displayed:** Product modal supporting direct-to-storage presigned S3 image uploads with progress indicators and thumbnail preview gallery. Form validates title (3–120 chars), category selector, unit price (1–1,000,000 INR), integer stock count (0–100,000), tags, and description (up to 2000 chars).
+
+| Add / Edit Product Modal |
+|:---:|
+| ![Add and Edit Product Modal](docs/screenshots/vendor-add-edit-product.png) |
+| *Figure 6.4: Interactive product creation and modification modal with direct cloud image upload* |
+
+#### 5. Vendor Order Management & Fulfillment
+- **Route:** `/vendor/orders`
+- **Source Component:** `frontend/src/pages/vendor/VendorOrdersPage.jsx`
+- **Features Displayed:** Sub-orders fulfillment dashboard with filter tabs (`All`, `Placed`, `Packed`, `Shipped`, `Delivered`). Displays customer delivery addresses, line-item summaries with product thumbnails, item pricing, subtotal, and one-click fulfillment timeline advancement buttons (`Advance to Packed`, `Advance to Shipped`, `Advance to Delivered`).
+
+| Vendor Order Fulfillment |
+|:---:|
+| ![Vendor Order Management](docs/screenshots/vendor-orders.png) |
+| *Figure 6.5: Vendor sub-order fulfillment dashboard with status filtering and timeline advancement controls* |
+
+#### 6. Vendor Earnings & Payout Ledger
+- **Route:** `/vendor/earnings`
+- **Source Component:** `frontend/src/pages/vendor/VendorEarningsPage.jsx`
+- **Features Displayed:** Real-time financial analytics cards (Gross Revenue, Platform Commission Deducted, Net Earnings, Pending Transfers) alongside a paginated payout ledger table displaying order numbers, sub-order subtotals, platform commission amounts, net vendor payouts, gateway transfer IDs, and payout status chips (`processed`, `pending`, `failed`, `reversed`).
+
+| Vendor Earnings & Payout Ledger |
+|:---:|
+| ![Vendor Earnings and Payouts](docs/screenshots/vendor-earnings.png) |
+| *Figure 6.6: Financial analytics screen showing revenue breakdown cards and the automated payout ledger* |
+
+#### 7. Store Profile Management
+- **Route:** `/vendor/profile`
+- **Source Component:** `frontend/src/pages/vendor/VendorProfilePage.jsx`
+- **Features Displayed:** Store branding and administrative settings interface to update store name, public bio/description, logo URL, view admin-assigned platform commission percentage (0–50%), and inspect linked payout account identifier (`acc_mock_...`).
+
+| Store Profile Management |
+|:---:|
+| ![Vendor Store Profile](docs/screenshots/vendor-profile.png) |
+| *Figure 6.7: Store profile settings with logo upload and payout account details* |
+
+---
+
+### 6.3 Manual Screenshot Capture Checklist
+
+When capturing screenshots for the Vendor module, use this checklist to ensure all states are properly reflected:
+
+| Filename | Route / View | Recommended Prerequisites / State |
+|---|---|---|
+| `docs/screenshots/vendor-application.png` | `/become-seller` | Log in as a customer without vendor privileges. |
+| `docs/screenshots/vendor-dashboard.png` | `/vendor` | Log in as an approved vendor (`Aura Tech Hub` or `Velvet & Thread`). |
+| `docs/screenshots/vendor-products.png` | `/vendor/products` | Populate products via `npm run seed:demo` to show populated catalog table. |
+| `docs/screenshots/vendor-add-edit-product.png` | `/vendor/products` | Click "Add Product" button to open the modal dialog with image upload zone. |
+| `docs/screenshots/vendor-orders.png` | `/vendor/orders` | Place orders as customer so vendor sub-orders appear with status advance buttons. |
+| `docs/screenshots/vendor-earnings.png` | `/vendor/earnings` | Complete test payments so gross sales, commission, and payout records are populated. |
+| `docs/screenshots/vendor-profile.png` | `/vendor/profile` | View store profile showing store name, description, logo, and commission rate. |
 
 ---
 

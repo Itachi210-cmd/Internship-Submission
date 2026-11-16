@@ -1,19 +1,28 @@
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import api from '../api/axios';
 import useAuth from '../hooks/useAuth';
 
 export default function BecomeSellerPage() {
   const { isAuthenticated } = useAuth();
+  const location = useLocation();
 
   const [vendorProfile, setVendorProfile] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [storeName, setStoreName] = useState('');
-  const [description, setDescription] = useState('');
+  const [storeName, setStoreName] = useState(location.state?.storeName || '');
+  const [description, setDescription] = useState(location.state?.description || '');
   const [logoUrl, setLogoUrl] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState('');
-  const [successMsg, setSuccessMsg] = useState('');
+  const [error, setError] = useState(
+    location.state?.applyFailed
+      ? location.state.error || 'Your account was created, but store application submission failed. You can complete it below.'
+      : ''
+  );
+  const [successMsg, setSuccessMsg] = useState(
+    location.state?.newlyApplied
+      ? 'Application pending, we will notify you after admin approval.'
+      : ''
+  );
 
   const fetchProfile = async () => {
     setLoading(true);
@@ -36,12 +45,22 @@ export default function BecomeSellerPage() {
   }, [isAuthenticated]);
 
   const handleSubmit = async (e) => {
-    e.preventDefault();
+    if (e && e.preventDefault) {
+      e.preventDefault();
+    }
     setError('');
     setSuccessMsg('');
 
     if (!storeName.trim()) {
-      setError('Store name is required.');
+      setError('Store name is required (3–60 characters).');
+      return;
+    }
+    if (storeName.trim().length < 3 || storeName.trim().length > 60) {
+      setError('Store name must be between 3 and 60 characters.');
+      return;
+    }
+    if (description.trim() && (description.trim().length < 10 || description.trim().length > 500)) {
+      setError('Store description must be between 10 and 500 characters.');
       return;
     }
 
@@ -52,7 +71,7 @@ export default function BecomeSellerPage() {
         description: description.trim(),
         logoUrl: logoUrl.trim(),
       });
-      setSuccessMsg(response.data?.message || 'Application submitted successfully!');
+      setSuccessMsg('Application pending, we will notify you after admin approval.');
       setVendorProfile(response.data?.vendor);
     } catch (err) {
       setError(err.message || 'Failed to submit vendor application');
@@ -75,11 +94,16 @@ export default function BecomeSellerPage() {
           </div>
           <h2 className="stitch-onboarding-unauth-title">Become a {'<ShopNest>'} Seller</h2>
           <p className="stitch-onboarding-unauth-desc">
-            Please sign in to your customer account before applying to open a verified vendor storefront.
+            Open a store to list products, reach shoppers across multiple categories, and manage fulfillment.
           </p>
-          <Link to="/login" state={{ from: { pathname: '/become-seller' } }} className="btn btn-primary btn-block">
-            Sign In to Apply
-          </Link>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', width: '100%', marginTop: '1.25rem' }}>
+            <Link to="/register?type=sell" className="btn btn-primary btn-block">
+              Open a Store (Register)
+            </Link>
+            <Link to="/login" state={{ from: { pathname: '/become-seller' } }} className="btn btn-secondary btn-block">
+              Sign In with Existing Account
+            </Link>
+          </div>
         </div>
       </div>
     );
@@ -96,6 +120,18 @@ export default function BecomeSellerPage() {
 
   return (
     <div className="stitch-onboarding-container">
+      {/* Top Notice: Vendor accounts are for selling */}
+      <div className="stitch-vendor-role-note">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="10" />
+          <line x1="12" y1="16" x2="12" y2="12" />
+          <line x1="12" y1="8" x2="12.01" y2="8" />
+        </svg>
+        <span>
+          Vendor accounts are for selling; to buy products use a separate customer account.
+        </span>
+      </div>
+
       {/* Top Banner Header */}
       <div className="stitch-onboarding-header">
         <div>
@@ -168,9 +204,9 @@ export default function BecomeSellerPage() {
                 </svg>
               </div>
               <div className="stitch-status-content">
-                <h4 className="stitch-status-title">Application Under Review</h4>
+                <h4 className="stitch-status-title">Application pending, we will notify you after admin approval</h4>
                 <p className="stitch-status-desc">
-                  Our administrative compliance team is reviewing your store details. Once approved, you will gain immediate access to the Vendor Dashboard and catalog management.
+                  Our administrative compliance team is reviewing your store details. Once approved, your account will be activated with vendor privileges to access the Vendor Studio and catalog management.
                 </p>
                 <div className="stitch-status-meta-row">
                   <button
@@ -267,7 +303,32 @@ export default function BecomeSellerPage() {
             </div>
           </div>
 
-          {error && (
+          {location.state?.applyFailed && (
+            <div className="stitch-retry-card" role="alert">
+              <div className="stitch-retry-card-header">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="12" y1="8" x2="12" y2="12" />
+                  <line x1="12" y1="16" x2="12.01" y2="16" />
+                </svg>
+                <strong>Account created successfully!</strong>
+              </div>
+              <p>
+                Your customer account is active, but your seller application could not be submitted automatically: {error || 'Network error'}. You do not need to register again. You can submit your application now:
+              </p>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={handleSubmit}
+                disabled={isSubmitting}
+                style={{ alignSelf: 'flex-start', marginTop: '0.5rem' }}
+              >
+                {isSubmitting ? 'Submitting...' : 'Retry Application Now'}
+              </button>
+            </div>
+          )}
+
+          {error && !location.state?.applyFailed && (
             <div className="alert-box alert-error" style={{ marginBottom: '1.5rem' }}>
               <span>⚠️</span>
               <span>{error}</span>
@@ -285,7 +346,7 @@ export default function BecomeSellerPage() {
             <div className="stitch-profile-fields-grid">
               <div className="form-group">
                 <label htmlFor="store-name" className="form-label">
-                  Store Name *
+                  Store Name * (3–60 characters)
                 </label>
                 <input
                   id="store-name"
@@ -294,6 +355,8 @@ export default function BecomeSellerPage() {
                   placeholder="e.g. Apex Electronics, Bloom Fashion"
                   value={storeName}
                   onChange={(e) => setStoreName(e.target.value)}
+                  minLength={3}
+                  maxLength={60}
                   required
                   disabled={isSubmitting}
                 />
@@ -301,7 +364,7 @@ export default function BecomeSellerPage() {
 
               <div className="form-group">
                 <label htmlFor="store-desc" className="form-label">
-                  Store Description
+                  Store Description (10–500 characters)
                 </label>
                 <textarea
                   id="store-desc"
@@ -310,6 +373,8 @@ export default function BecomeSellerPage() {
                   placeholder="Tell customers about the products you specialize in, store mission, and fulfillment focus..."
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
+                  minLength={10}
+                  maxLength={500}
                   disabled={isSubmitting}
                 />
               </div>

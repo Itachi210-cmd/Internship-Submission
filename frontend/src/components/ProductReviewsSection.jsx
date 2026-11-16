@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import api from '../api/axios';
 import useAuth from '../hooks/useAuth';
 
@@ -52,7 +53,7 @@ export default function ProductReviewsSection({ productId }) {
 
   const fetchEligibility = useCallback(async () => {
     if (!isAuthenticated) {
-      setEligibility({ canReview: false, reason: 'Log in as a customer to review this product' });
+      setEligibility({ canReview: false, reason: 'Sign in to review this product' });
       return;
     }
     if (user?.role !== 'customer') {
@@ -317,9 +318,9 @@ export default function ProductReviewsSection({ productId }) {
               </div>
             </div>
             {!isAuthenticated && (
-              <a href="/login" className="btn btn-secondary btn-sm">
-                Log In
-              </a>
+              <Link to="/login" className="btn btn-secondary btn-sm">
+                Sign in
+              </Link>
             )}
           </div>
         )}

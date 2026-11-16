@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../api/axios';
+import useAuth from '../hooks/useAuth';
 
 export default function HomePage() {
+  const { user, isAuthenticated } = useAuth();
   const [featuredProducts, setFeaturedProducts] = useState([]);
   const [loadingProducts, setLoadingProducts] = useState(true);
   const [errorProducts, setErrorProducts] = useState(null);
@@ -56,7 +58,10 @@ export default function HomePage() {
                 <Link to="/products" className="btn btn-primary btn-lg">
                   Browse products
                 </Link>
-                <Link to="/become-seller" className="btn btn-secondary btn-lg">
+                <Link
+                  to={!isAuthenticated ? '/register?type=sell' : user?.role === 'vendor' ? '/vendor/products' : '/become-seller'}
+                  className="btn btn-secondary btn-lg"
+                >
                   Become a seller
                 </Link>
               </div>
