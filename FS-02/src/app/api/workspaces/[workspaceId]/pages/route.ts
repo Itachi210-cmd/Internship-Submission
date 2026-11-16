@@ -1,0 +1,184 @@
+import { NextRequest, NextResponse } from "next/server";
+import { checkWorkspaceAccess } from "@/lib/auth/workspace-auth";
+import { createPageSchema, DEFAULT_PAGE_CONTENT } from "@/lib/validations/page";
+import { prisma } from "@/lib/prisma";
+import { Role } from "@prisma/client";
+import { workspaceEvents } from "@/lib/events/workspace-events";
+import {
+  NO_STORE_HEADERS,
+  readJsonBody,
+  verifySameOriginCsrf,
+} from "@/lib/security/api-guard";
+import { logStructured } from "@/lib/logger.mjs";
+
+interface RouteParams {
+  params: Promise<{
+    workspaceId: string;
+  }>;
+}
+
+/**
+ * GET /api/workspaces/[workspaceId]/pages
+ * Lists page metadata in the authorized workspace (excludes heavy JSONB content blobs).
+ */
+export async function GET(request: NextRequest, { params }: RouteParams) {
+  try {
+    const { workspaceId } = await params;
+    const authCheck = await checkWorkspaceAccess(workspaceId);
+    if (!authCheck.success) {
+      return NextResponse.json(
+        { error: authCheck.error },
+        { status: authCheck.status, headers: NO_STORE_HEADERS }
+      );
+    }
+
+    const rawLimit = Number.parseInt(
+      request.nextUrl.searchParams.get("limit") || "250",
+      10
+    );
+    const take =
+      Number.isInteger(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 500) : 250;
+
+    const pages = await prisma.page.findMany({
+      where: { workspaceId },
+      select: {
+        id: true,
+        workspaceId: true,
+        parentPageId: true,
+        title: true,
+        createdById: true,
+        createdAt: true,
+        updatedAt: true,
+        createdBy: {
+          select: { id: true, name: true, email: true },
+        },
+      },
+      orderBy: { createdAt: "asc" },
+      take,
+    });
+
+    return NextResponse.json(
+      { pages },
+      { status: 200, headers: NO_STORE_HEADERS }
+    );
+  } catch (error) {
+    logStructured("error", "PagesAPI", "list_failed", { error });
+    return NextResponse.json(
+      { error: "Internal server error" },
+      { status: 500, headers: NO_STORE_HEADERS }
+    );
+  }
+}
+
+/**
+ * POST /api/workspaces/[workspaceId]/pages
+ * Creates a new page inside the workspace.
+ * Validates workspace membership, ensures parentPageId belongs to the same workspace,
+ * and sets createdById from the authenticated session.
+ */
+export async function POST(request: NextRequest, { params }: RouteParams) {
+  try {
+    const csrfError = verifySameOriginCsrf(request);
+    if (csrfError) return csrfError;
+
+    const { workspaceId } = await params;
+    const authCheck = await checkWorkspaceAccess(workspaceId);
+    if (!authCheck.success) {
+      return NextResponse.json(
+        { error: authCheck.error },
+        { status: authCheck.status, headers: NO_STORE_HEADERS }
+      );
+    }
+
+    const { isOwner, membership, session } = authCheck.data;
+    const effectiveRole: Role = isOwner ? Role.OWNER : (membership?.role as Role);
+
+    if (effectiveRole !== Role.OWNER && effectiveRole !== Role.EDITOR) {
+      return NextResponse.json(
+        {
+          error:
+            "Forbidden: You do not have permission to create pages in this workspace.",
+        },
+        { status: 403, headers: NO_STORE_HEADERS }
+      );
+    }
+
+    const parsedBody = await readJsonBody(request, 2.5 * 1024 * 1024);
+    if (!parsedBody.ok) return parsedBody.response;
+
+    const parseResult = createPageSchema.safeParse(parsedBody.data);
+    if (!parseResult.success) {
+      return NextResponse.json(
+        {
+          error: "Invalid input",
+          issues: parseResult.error.flatten().fieldErrors,
+        },
+        { status: 400, headers: NO_STORE_HEADERS }
+      );
+    }
+
+    const { title, parentPageId } = parseResult.data;
+
+    // Validate parentPageId if provided:
+    // It MUST belong to the SAME workspace to prevent cross-workspace references!
+    if (parentPageId) {
+      const parentPage = await prisma.page.findUnique({
+        where: { id: parentPageId },
+        select: { id: true, workspaceId: true },
+      });
+
+      if (!parentPage || parentPage.workspaceId !== workspaceId) {
+        return NextResponse.json(
+          {
+            error:
+              "Invalid parent page: The parent document does not exist in this workspace.",
+          },
+          { status: 400 }
+        );
+      }
+    }
+
+    const page = await prisma.page.create({
+      data: {
+        title,
+        workspaceId,
+        parentPageId: parentPageId || null,
+        createdById: session.userId,
+        content: parseResult.data.content || DEFAULT_PAGE_CONTENT,
+      },
+      include: {
+        createdBy: {
+          select: { id: true, name: true, email: true },
+        },
+      },
+    });
+
+    // Broadcast real-time page creation event to all members of this workspace
+    workspaceEvents.emitWorkspaceEvent(workspaceId, {
+      type: "PAGE_CREATED",
+      page: {
+        id: page.id,
+        title: page.title,
+        parentPageId: page.parentPageId,
+        workspaceId: page.workspaceId,
+        createdAt: page.createdAt,
+        updatedAt: page.updatedAt,
+      },
+    });
+
+    return NextResponse.json(
+      {
+        message: "Page created successfully",
+        page,
+      },
+      { status: 201 }
+    );
+  } catch (error) {
+    console.error("[PAGE_CREATE_ERROR]", error);
+    return NextResponse.json(
+      { error: "Internal server error" },
+      { status: 500 }
+    );
+  }
+}
+

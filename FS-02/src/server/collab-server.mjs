@@ -1,0 +1,1833 @@
+/**
+ * Dedicated Yjs WebSocket Collaboration Server
+ * Real-Time Collaborative Workspace - Phase 6 Step 2
+ *
+ * Runs as a standalone Node.js ES module on port 1234 (configurable).
+ * Enforces first-message JWT authentication, strict role-based authorization,
+ * Origin validation, multi-room Yjs document synchronization, and
+ * in-memory room cleanup with a 30-second grace period.
+ */
+
+import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { WebSocketServer, WebSocket } from 'ws';
+import * as Y from 'yjs';
+import * as syncProtocol from 'y-protocols/sync';
+import * as awarenessProtocol from 'y-protocols/awareness';
+import * as authProtocol from 'y-protocols/auth';
+import * as encoding from 'lib0/encoding';
+import * as decoding from 'lib0/decoding';
+import { jwtVerify } from 'jose';
+import {
+  loadDocumentState,
+  scheduleSave,
+  flushSave,
+  closePersistence,
+  sanitizeAwarenessUpdate,
+  hasPendingSave,
+  getPrismaClient,
+} from './collab-persistence.mjs';
+import {
+  createRecoverySnapshot,
+  replaceDocXmlFragment,
+} from './version-snapshot-service.mjs';
+import { createCollabRedis } from './collab-redis.mjs';
+import { logStructured } from '../lib/logger.mjs';
+import {
+  INTERNAL_RPC_SECRET_REGEX,
+  getAuthSecretKey,
+  normalizeOrigin,
+  validateAuthSecret,
+  validateDatabaseUrl,
+  validateInternalRpcSecretValue,
+  validatePortEnv,
+  validatePositiveIntEnv,
+} from '../lib/env.mjs';
+
+// Protocol Message Constants
+const MESSAGE_SYNC = 0;
+const MESSAGE_AWARENESS = 1;
+const MESSAGE_AUTH = 2;
+const MESSAGE_QUERY_AWARENESS = 3;
+
+// JWT Token Constraints (matches src/lib/auth/collab-token.ts)
+const COLLAB_TOKEN_ISSUER = 'collab-workspace-auth';
+const COLLAB_TOKEN_AUDIENCE = 'collab-workspace-yjs';
+
+// Internal RPC Secret Constraint (strictly 64 hex characters / 32 random bytes)
+export { INTERNAL_RPC_SECRET_REGEX };
+
+/**
+ * Validates the internal RPC secret for presence and minimum cryptographic entropy.
+ * Requires exactly 64 hexadecimal characters (32 random bytes).
+ *
+ * @param {string} secret
+ * @throws {Error} If secret is missing, empty, or invalid format
+ */
+export function validateInternalRpcSecret(secret) {
+  const result = validateInternalRpcSecretValue(secret);
+  if (!result.valid) {
+    throw new Error(`[CollabServer] Fatal startup error: ${result.error}`);
+  }
+  return true;
+}
+
+/**
+ * Loads environment variables from .env.local or .env if not already set.
+ */
+function loadEnvIfPresent() {
+
+  const envFiles = [
+    path.resolve(process.cwd(), '.env.local'),
+    path.resolve(process.cwd(), '.env'),
+  ];
+
+  for (const envPath of envFiles) {
+    if (fs.existsSync(envPath)) {
+      try {
+        const content = fs.readFileSync(envPath, 'utf8');
+        for (const line of content.split('\n')) {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed.startsWith('#')) continue;
+          const eqIdx = trimmed.indexOf('=');
+          if (eqIdx > 0) {
+            const key = trimmed.slice(0, eqIdx).trim();
+            let val = trimmed.slice(eqIdx + 1).trim();
+            if (
+              (val.startsWith('"') && val.endsWith('"')) ||
+              (val.startsWith("'") && val.endsWith("'"))
+            ) {
+              val = val.slice(1, -1);
+            }
+            if (!process.env[key]) {
+              process.env[key] = val;
+            }
+          }
+        }
+      } catch (err) {
+        console.warn(`[CollabServer] Failed reading ${envPath}:`, err.message);
+      }
+    }
+  }
+}
+
+loadEnvIfPresent();
+
+/**
+ * Verifies and decodes a short-lived collaboration JWT token.
+ *
+ * @param {string} token
+ * @returns {Promise<any>} decoded payload
+ */
+async function verifyCollabToken(token, authSecretOverride) {
+  const secretKey = authSecretOverride
+    ? new TextEncoder().encode(authSecretOverride)
+    : getAuthSecretKey();
+
+  const { payload } = await jwtVerify(token, secretKey, {
+    algorithms: ['HS256'],
+    issuer: COLLAB_TOKEN_ISSUER,
+    audience: COLLAB_TOKEN_AUDIENCE,
+  });
+
+  if (
+    !payload ||
+    typeof payload.sub !== 'string' ||
+    typeof payload.userName !== 'string' ||
+    typeof payload.pageId !== 'string' ||
+    typeof payload.workspaceId !== 'string' ||
+    typeof payload.role !== 'string' ||
+    payload.purpose !== 'collaboration'
+  ) {
+    throw new Error('Malformed collaboration token claims');
+  }
+
+  return payload;
+}
+
+/**
+ * Sends a Yjs permission denied message to a WebSocket client.
+ *
+ * @param {WebSocket} ws
+ * @param {string} reason
+ */
+function sendPermissionDenied(ws, reason) {
+  try {
+    if (ws.readyState === WebSocket.OPEN) {
+      const encoder = encoding.createEncoder();
+      encoding.writeVarUint(encoder, MESSAGE_AUTH);
+      authProtocol.writePermissionDenied(encoder, reason);
+      ws.send(encoding.toUint8Array(encoder));
+    }
+  } catch {}
+}
+
+/**
+ * Creates and configures the Yjs collaboration server instance.
+ *
+ * @param {Object} [options]
+ * @param {number} [options.port]
+ * @param {string} [options.host]
+ * @param {string[]} [options.allowedOrigins]
+ * @param {number} [options.authTimeoutMs]
+ * @param {number} [options.cleanupGraceMs]
+ * @param {string} [options.authSecret]
+ * @returns {Object} { server, wss, rooms, start, close }
+ */
+export function createCollabServer(options = {}) {
+  // Validate AUTH_SECRET at startup so misconfigured deployments fail fast
+  const authSecretCandidate =
+    'authSecret' in options ? options.authSecret : process.env.AUTH_SECRET;
+  const authCheck = validateAuthSecret(authSecretCandidate);
+  if (!authCheck.valid) {
+    throw new Error(`[CollabServer] Fatal startup error: ${authCheck.error}`);
+  }
+
+  // Validate DATABASE_URL at startup unless custom persistence/prisma is injected
+  if (!options.prisma && !options.loadDocumentState) {
+    const dbCheck = validateDatabaseUrl(process.env.DATABASE_URL, {
+      isProduction: process.env.NODE_ENV === 'production',
+    });
+    if (!dbCheck.valid) {
+      throw new Error(`[CollabServer] Fatal startup error: ${dbCheck.error}`);
+    }
+  }
+
+  let port = options.port;
+  if (port === undefined) {
+    const portCheck = validatePortEnv('COLLAB_PORT', process.env.COLLAB_PORT);
+    if (!portCheck.valid) {
+      throw new Error(`[CollabServer] Fatal startup error: ${portCheck.error}`);
+    }
+    port = portCheck.port ?? 1234;
+  }
+
+  const host = options.host ?? (process.env.COLLAB_HOST || undefined);
+
+  let authTimeoutMs = options.authTimeoutMs;
+  if (authTimeoutMs === undefined) {
+    const timeoutCheck = validatePositiveIntEnv(
+      'COLLAB_AUTH_TIMEOUT_MS',
+      process.env.COLLAB_AUTH_TIMEOUT_MS
+    );
+    if (!timeoutCheck.valid) {
+      throw new Error(`[CollabServer] Fatal startup error: ${timeoutCheck.error}`);
+    }
+    authTimeoutMs = timeoutCheck.value ?? 5000;
+  }
+
+  let cleanupGraceMs = options.cleanupGraceMs;
+  if (cleanupGraceMs === undefined) {
+    const graceCheck = validatePositiveIntEnv(
+      'COLLAB_CLEANUP_GRACE_MS',
+      process.env.COLLAB_CLEANUP_GRACE_MS
+    );
+    if (!graceCheck.valid) {
+      throw new Error(`[CollabServer] Fatal startup error: ${graceCheck.error}`);
+    }
+    cleanupGraceMs = graceCheck.value ?? 30000;
+  }
+
+  const baseAllowedOrigins = [
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    'http://localhost:3001',
+    'http://127.0.0.1:3001',
+  ];
+  if (process.env.NEXT_PUBLIC_APP_URL) {
+    baseAllowedOrigins.push(process.env.NEXT_PUBLIC_APP_URL);
+  }
+  if (process.env.RENDER_EXTERNAL_URL) {
+    baseAllowedOrigins.push(process.env.RENDER_EXTERNAL_URL);
+  }
+
+  const originsSources = [];
+  if (options.allowedOrigins && Array.isArray(options.allowedOrigins)) {
+    originsSources.push(...options.allowedOrigins);
+  } else if (process.env.COLLAB_ALLOWED_ORIGINS) {
+    originsSources.push(...process.env.COLLAB_ALLOWED_ORIGINS.split(','));
+  }
+  if (!options.allowedOrigins) {
+    originsSources.push(...baseAllowedOrigins);
+  }
+
+  const allowedOrigins = [
+    ...new Set(originsSources.map(normalizeOrigin).filter(Boolean)),
+  ];
+
+  const internalRpcSecret =
+    'internalRpcSecret' in options
+      ? options.internalRpcSecret
+      : process.env.INTERNAL_RPC_SECRET;
+  validateInternalRpcSecret(internalRpcSecret);
+  const allowExternalRpc = options.allowExternalRpc ?? false;
+
+  const instanceId = options.instanceId || `collab-${crypto.randomUUID()}`;
+  const enableRedis =
+    options.enableRedis !== undefined
+      ? Boolean(options.enableRedis)
+      : process.env.REDIS_ENABLED !== 'false';
+  const redisUrl = options.redisUrl || process.env.REDIS_URL || 'redis://localhost:6379';
+  const collabRedis = options.collabRedis || createCollabRedis({
+    redisUrl,
+    instanceId,
+    enabled: enableRedis,
+    channelPrefix: options.redisChannelPrefix,
+  });
+
+  const loadState = options.loadDocumentState || loadDocumentState;
+
+  // In-memory room storage: Map<pageId, CollabRoom>
+  const rooms = new Map();
+  globalThis.__collabRooms = rooms;
+  // In-flight room hydration deduplication: Map<pageId, Promise<CollabRoom>>
+  const roomHydrationPromises = new Map();
+  // Per-page restore mutex to serialize concurrent restore operations
+  const restoreLocks = new Map();
+  let isShuttingDown = false;
+
+  /**
+   * Broadcasts a JSON save status update to all connected authenticated clients in a room.
+   */
+  function broadcastSaveStatus(targetRoom, statusPayload) {
+    if (!targetRoom || targetRoom.isDestroyed) return;
+    const msg = JSON.stringify(statusPayload);
+    for (const client of targetRoom.clients) {
+      if (client.readyState === WebSocket.OPEN && client.isCollabAuthenticated) {
+        try {
+          client.send(msg);
+        } catch (err) {
+          console.error(`[CollabServer] Error sending save status in room "${targetRoom.pageId}":`, err.message);
+        }
+      }
+    }
+  }
+
+  /**
+   * Retrieves or initializes a collaboration room for a given pageId,
+   * awaiting database hydration before returning.
+   *
+   * @param {string} pageId
+   * @returns {Promise<Object>} CollabRoom
+   */
+  async function getOrCreateRoom(pageId) {
+    let room = rooms.get(pageId);
+    if (room) {
+      return room;
+    }
+
+    // Deduplicate simultaneous hydration requests for the same room
+    let hydrationPromise = roomHydrationPromises.get(pageId);
+    if (hydrationPromise) {
+      return await hydrationPromise;
+    }
+
+    const doc = new Y.Doc();
+    const awareness = new awarenessProtocol.Awareness(doc);
+    const clients = new Set();
+
+    room = {
+      pageId,
+      doc,
+      awareness,
+      clients,
+      cleanupTimer: null,
+      isDestroyed: false,
+      lastSavedVersion: 0,
+      hasUnsavedChanges: false,
+      redisUnsubscribe: null,
+    };
+
+    hydrationPromise = (async () => {
+      try {
+        console.log(`[CollabServer] Loading persisted state for room "${pageId}"...`);
+        const loadResult = await loadState(pageId, doc);
+        room.lastSavedVersion = loadResult.version || 0;
+        room.hasUnsavedChanges = false;
+        console.log(
+          `[CollabServer] Room "${pageId}" hydrated successfully (source: ${loadResult.source}, version: ${loadResult.version})`
+        );
+
+        // Subscribe to cross-instance Redis updates & awareness for this room
+        if (collabRedis && collabRedis.enabled && !room.redisUnsubscribe) {
+          const handleRemoteRedisUpdate = (updateBytes, payload) => {
+            if (room.isDestroyed) return;
+            if (payload && payload.type === 'yjs_persisted') {
+              if (payload.stateVersion && payload.stateVersion >= room.lastSavedVersion) {
+                room.lastSavedVersion = payload.stateVersion;
+                room.hasRemoteEdits = false;
+              }
+              return;
+            }
+            if (!room.doc || !updateBytes) return;
+            try {
+              room.hasRemoteEdits = true;
+              // Apply remote update to local Y.Doc with origin 'redis'
+              Y.applyUpdate(room.doc, updateBytes, 'redis');
+            } catch (err) {
+              console.error(`[CollabServer] Error applying remote Redis update in room "${pageId}":`, err.message);
+            }
+          };
+
+          const handleRemoteRedisAwareness = (awarenessBytes) => {
+            if (room.isDestroyed || !room.awareness || !awarenessBytes) return;
+            try {
+              // Apply remote awareness to local room with origin 'redis'
+              awarenessProtocol.applyAwarenessUpdate(room.awareness, awarenessBytes, 'redis');
+            } catch (err) {
+              console.error(`[CollabServer] Error applying remote Redis awareness in room "${pageId}":`, err.message);
+            }
+          };
+
+          collabRedis.subscribeRoom(pageId, handleRemoteRedisUpdate);
+          collabRedis.subscribeAwareness(pageId, handleRemoteRedisAwareness);
+
+          room.redisUnsubscribe = () => {
+            collabRedis.unsubscribeRoom(pageId, handleRemoteRedisUpdate);
+            collabRedis.unsubscribeAwareness(pageId, handleRemoteRedisAwareness);
+          };
+        }
+
+        // Attach doc update listener AFTER hydration completes so initial load doesn't trigger save
+        doc.on('update', (update, origin) => {
+          const encoder = encoding.createEncoder();
+          encoding.writeVarUint(encoder, MESSAGE_SYNC);
+          syncProtocol.writeUpdate(encoder, update);
+          const msg = encoding.toUint8Array(encoder);
+
+          for (const client of room.clients) {
+            if (client !== origin && client.readyState === WebSocket.OPEN && client.isCollabAuthenticated) {
+              try {
+                client.send(msg, { binary: true }, (err) => {
+                  if (err) {
+                    console.error(`[CollabServer] Error sending doc update in room "${pageId}":`, err.message);
+                  }
+                });
+              } catch (err) {
+                console.error(`[CollabServer] Failed broadcasting doc update in room "${pageId}":`, err);
+              }
+            }
+          }
+
+          // Publish to Redis if origin is not 'redis' and not 'persistence'
+          if (origin !== 'redis' && origin !== 'persistence' && collabRedis && collabRedis.enabled) {
+            collabRedis.publishUpdate(pageId, update, {
+              origin: typeof origin === 'string' ? origin : 'client',
+            }).catch((err) => {
+              console.error(`[CollabServer] Failed publishing update to Redis for room "${pageId}":`, err.message);
+            });
+          }
+
+          // Trigger debounced persistence for non-persistence and non-redis updates
+          if (origin !== 'persistence' && origin !== 'redis' && !room.isDestroyed) {
+            room.hasUnsavedChanges = true;
+            broadcastSaveStatus(room, {
+              type: 'save_status',
+              status: 'saving',
+              pageId,
+            });
+
+            scheduleSave(pageId, doc, { collabRedis, prisma: options.prisma })
+              .then((saveResult) => {
+                room.lastSavedVersion = saveResult.stateVersion;
+                // Only mark saved if no further edits were scheduled during the save
+                if (!hasPendingSave(pageId)) {
+                  room.hasUnsavedChanges = false;
+                  broadcastSaveStatus(room, {
+                    type: 'save_status',
+                    status: 'saved',
+                    pageId,
+                    stateVersion: saveResult.stateVersion,
+                    savedAt: new Date().toISOString(),
+                  });
+                }
+              })
+              .catch((err) => {
+                console.error(`[CollabServer] Error during scheduled persistence for room "${pageId}":`, err.message);
+                broadcastSaveStatus(room, {
+                  type: 'save_status',
+                  status: 'error',
+                  pageId,
+                  error: 'Failed to persist document to storage',
+                });
+              });
+          }
+        });
+
+        // Broadcast awareness updates to other authenticated room clients and Redis
+        awareness.on('update', ({ added, updated, removed }, origin) => {
+          const changedClients = added.concat(updated).concat(removed);
+          const encoder = encoding.createEncoder();
+          encoding.writeVarUint(encoder, MESSAGE_AWARENESS);
+          const awarenessBytes = awarenessProtocol.encodeAwarenessUpdate(awareness, changedClients);
+          encoding.writeVarUint8Array(encoder, awarenessBytes);
+          const msg = encoding.toUint8Array(encoder);
+
+          for (const client of room.clients) {
+            if (client !== origin && client.readyState === WebSocket.OPEN && client.isCollabAuthenticated) {
+              try {
+                client.send(msg, { binary: true }, (err) => {
+                  if (err) {
+                    console.error(`[CollabServer] Error sending awareness update in room "${pageId}":`, err.message);
+                  }
+                });
+              } catch (err) {
+                console.error(`[CollabServer] Failed broadcasting awareness update in room "${pageId}":`, err);
+              }
+            }
+          }
+
+          // Broadcast awareness to other server instances via Redis (if origin is not 'redis')
+          if (origin !== 'redis' && collabRedis && collabRedis.enabled) {
+            collabRedis.publishAwareness(pageId, awarenessBytes).catch((err) => {
+              console.error(`[CollabServer] Failed publishing awareness to Redis for room "${pageId}":`, err.message);
+            });
+          }
+        });
+
+        rooms.set(pageId, room);
+        console.log(`[CollabServer] Initialized and registered hydrated room "${pageId}"`);
+        return room;
+      } catch (err) {
+        console.error(`[CollabServer] Failed hydrating room "${pageId}":`, err.message);
+        try {
+          awareness.destroy();
+          doc.destroy();
+        } catch {}
+        rooms.delete(pageId);
+        throw err;
+      } finally {
+        roomHydrationPromises.delete(pageId);
+      }
+    })();
+
+    roomHydrationPromises.set(pageId, hydrationPromise);
+    return await hydrationPromise;
+  }
+
+  // HTTP Server (Health check + Internal RPC + Upgrade routing)
+  const server = http.createServer(async (req, res) => {
+    try {
+      const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+
+      // 1. Health check endpoint (verifies DB and Redis readiness when enabled)
+      if (url.pathname === '/health' || url.pathname === '/healthz') {
+        if (isShuttingDown) {
+          res.writeHead(503, { 'Content-Type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              status: 'shutting_down',
+              instanceId,
+              uptime: process.uptime(),
+            })
+          );
+          return;
+        }
+
+        const isMockPersistence = Boolean(options.loadDocumentState && !options.prisma);
+        let dbStatus = isMockPersistence ? 'mocked' : 'unknown';
+        let dbHealthy = isMockPersistence;
+
+        if (!isMockPersistence) {
+          try {
+            const prismaClient = options.prisma || getPrismaClient();
+            await Promise.race([
+              prismaClient.$queryRaw`SELECT 1`,
+              new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('Database health check timeout')), 2500)
+              ),
+            ]);
+            dbStatus = 'ready';
+            dbHealthy = true;
+          } catch {
+            dbStatus = 'unavailable';
+            dbHealthy = false;
+          }
+        }
+
+        const redisEnabled = Boolean(collabRedis && collabRedis.enabled);
+        const redisHealthy = !redisEnabled || Boolean(collabRedis?.isHealthy?.());
+        const redisStatus = redisEnabled ? (collabRedis?.status || 'unavailable') : 'disabled';
+
+        const overallHealthy = dbHealthy && redisHealthy;
+        res.writeHead(overallHealthy ? 200 : 503, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            status: overallHealthy ? 'ok' : 'degraded',
+            instanceId,
+            uptime: process.uptime(),
+            roomsCount: rooms.size,
+            rooms: Array.from(rooms.keys()),
+            database: {
+              status: dbStatus,
+              healthy: dbHealthy,
+            },
+            redis: {
+              enabled: redisEnabled,
+              status: redisStatus,
+              healthy: redisHealthy,
+            },
+          })
+        );
+        return;
+      }
+
+      // 2. Internal RPC endpoints: /internal/*
+      if (url.pathname.startsWith('/internal/')) {
+        // Match: POST /internal/rooms/:pageId/flush
+        const flushMatch = url.pathname.match(/^\/internal\/rooms\/([^/]+)\/flush$/);
+        if (flushMatch) {
+          // Verify request originated from loopback interface
+          const remoteAddress = req.socket?.remoteAddress;
+          const isLoopback =
+            remoteAddress === '127.0.0.1' ||
+            remoteAddress === '::1' ||
+            remoteAddress === '::ffff:127.0.0.1' ||
+            remoteAddress === 'localhost';
+
+          if (!isLoopback && !allowExternalRpc) {
+            console.warn(`[CollabServer] Rejected non-loopback internal RPC attempt from: ${remoteAddress}`);
+            res.writeHead(403, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Forbidden: Internal RPC restricted to loopback address' }));
+            return;
+          }
+
+          // Authenticate with shared internal RPC secret using constant-time comparison
+          const authHeader = req.headers['authorization'] || '';
+          const [scheme, token] = authHeader.split(' ');
+
+          let isAuthValid = false;
+          if (scheme === 'Bearer' && token && typeof token === 'string') {
+            const expectedBuf = Buffer.from(internalRpcSecret, 'utf8');
+            const actualBuf = Buffer.from(token, 'utf8');
+            if (expectedBuf.length === actualBuf.length) {
+              isAuthValid = crypto.timingSafeEqual(expectedBuf, actualBuf);
+            }
+          }
+
+          if (!isAuthValid) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Unauthorized: Invalid internal RPC secret' }));
+            return;
+          }
+
+          // Validate HTTP method
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Method Not Allowed: Expected POST' }));
+            return;
+          }
+
+          // Extract and validate pageId
+          const pageId = decodeURIComponent(flushMatch[1]).trim();
+          if (!pageId || pageId.length > 255) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid pageId parameter' }));
+            return;
+          }
+
+          // Await room hydration if in progress
+          let room = rooms.get(pageId);
+          if (!room && roomHydrationPromises.has(pageId)) {
+            try {
+              room = await roomHydrationPromises.get(pageId);
+            } catch (err) {
+              console.error(`[CollabServer] Room hydration failed during internal flush for "${pageId}":`, err.message);
+              res.writeHead(500, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({
+                success: false,
+                active: true,
+                flushed: false,
+                pageId,
+                error: 'Room hydration failed',
+                detail: err.message,
+              }));
+              return;
+            }
+          }
+
+          // If no active in-memory room exists
+          if (!room || room.isDestroyed || !room.doc) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              success: true,
+              active: false,
+              flushed: false,
+              pageId,
+              message: 'No active in-memory room found for document',
+            }));
+            return;
+          }
+
+          // Active room exists: flush its actual Y.Doc to PostgreSQL persistence
+          try {
+            const saveResult = await flushSave(pageId, room.doc, { prisma: options.prisma, collabRedis });
+            room.lastSavedVersion = saveResult.stateVersion;
+            room.hasUnsavedChanges = false;
+
+            broadcastSaveStatus(room, {
+              type: 'save_status',
+              status: 'saved',
+              pageId,
+              stateVersion: saveResult.stateVersion,
+              savedAt: new Date().toISOString(),
+            });
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              success: true,
+              active: true,
+              flushed: true,
+              pageId,
+              stateVersion: saveResult.stateVersion,
+            }));
+          } catch (err) {
+            console.error(`[CollabServer] Error during internal flush for "${pageId}":`, err.message);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              success: false,
+              active: true,
+              flushed: false,
+              pageId,
+              error: 'Failed to flush active room to persistence',
+              detail: err.message,
+            }));
+          }
+          return;
+        }
+
+        // Match: POST /internal/rooms/:pageId/restore
+        const restoreMatch = url.pathname.match(/^\/internal\/rooms\/([^/]+)\/restore$/);
+        if (restoreMatch) {
+          // 1. Verify loopback origin
+          const remoteAddress = req.socket?.remoteAddress;
+          const isLoopback =
+            remoteAddress === '127.0.0.1' ||
+            remoteAddress === '::1' ||
+            remoteAddress === '::ffff:127.0.0.1' ||
+            remoteAddress === 'localhost';
+
+          if (!isLoopback && !allowExternalRpc) {
+            console.warn(`[CollabServer] Rejected non-loopback internal RPC restore attempt from: ${remoteAddress}`);
+            res.writeHead(403, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Forbidden: Internal RPC restricted to loopback address' }));
+            return;
+          }
+
+          // 2. Authenticate with shared internal RPC secret using constant-time comparison
+          const authHeader = req.headers['authorization'] || '';
+          const [scheme, token] = authHeader.split(' ');
+
+          let isAuthValid = false;
+          if (scheme === 'Bearer' && token && typeof token === 'string') {
+            const expectedBuf = Buffer.from(internalRpcSecret, 'utf8');
+            const actualBuf = Buffer.from(token, 'utf8');
+            if (expectedBuf.length === actualBuf.length) {
+              isAuthValid = crypto.timingSafeEqual(expectedBuf, actualBuf);
+            }
+          }
+
+          if (!isAuthValid) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Unauthorized: Invalid internal RPC secret' }));
+            return;
+          }
+
+          // 3. Validate HTTP method
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Method Not Allowed: Expected POST' }));
+            return;
+          }
+
+          // 4. Extract and validate pageId
+          const pageId = decodeURIComponent(restoreMatch[1]).trim();
+          if (!pageId || pageId.length > 255) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid pageId parameter' }));
+            return;
+          }
+
+          // 5. Parse JSON request body
+          let bodyText = '';
+          try {
+            bodyText = await new Promise((resolve, reject) => {
+              let accumulated = '';
+              req.on('data', (chunk) => {
+                accumulated += chunk;
+                if (accumulated.length > 10 * 1024 * 1024) {
+                  req.destroy();
+                  reject(new Error('Payload Too Large'));
+                }
+              });
+              req.on('end', () => resolve(accumulated));
+              req.on('error', reject);
+            });
+          } catch (err) {
+            res.writeHead(413, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err.message }));
+            return;
+          }
+
+          let body = {};
+          try {
+            body = bodyText ? JSON.parse(bodyText) : {};
+          } catch {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid JSON request body' }));
+            return;
+          }
+
+          const versionId = body.versionId;
+          if (!versionId || typeof versionId !== 'string') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Missing or invalid versionId parameter' }));
+            return;
+          }
+
+          const userId = body.userId || null;
+          const prisma = getPrismaClient(options.prisma);
+
+          // 6. Acquire per-page local restore mutex to serialize concurrent restores in this process
+          let unlock;
+          const lockPromise = new Promise((resolve) => {
+            unlock = resolve;
+          });
+          const previousLock = restoreLocks.get(pageId) || Promise.resolve();
+          restoreLocks.set(pageId, lockPromise);
+
+          let distRestoreLock = null;
+          try {
+            await previousLock;
+
+            // 7. Acquire cross-instance distributed restore lock
+            if (collabRedis && collabRedis.enabled) {
+              distRestoreLock = await collabRedis.acquireRestoreLock(pageId, 15000);
+              if (!distRestoreLock.acquired) {
+                res.writeHead(409, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                  error: 'Conflict: Document restoration is currently in progress on another server instance',
+                }));
+                return;
+              }
+            }
+
+            // 8. Await room hydration if in progress, or hydrate room
+            let room = rooms.get(pageId);
+            if (!room && roomHydrationPromises.has(pageId)) {
+              try {
+                room = await roomHydrationPromises.get(pageId);
+              } catch (err) {
+                console.error(`[CollabServer] Room hydration failed during restore for "${pageId}":`, err.message);
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                  success: false,
+                  error: 'Room hydration failed',
+                  detail: err.message,
+                }));
+                return;
+              }
+            }
+
+            if (!room || room.isDestroyed || !room.doc) {
+              room = await getOrCreateRoom(pageId);
+            }
+
+            // 8. Flush pending edits on the active room before modifying anything
+            if (room.hasUnsavedChanges || hasPendingSave(pageId)) {
+              await flushSave(pageId, room.doc, { prisma: options.prisma, collabRedis });
+              room.hasUnsavedChanges = false;
+            }
+
+            // 9. Create an automatic recovery snapshot of the latest current state
+            const recoverySnapshot = await createRecoverySnapshot(pageId, {
+              userId,
+              doc: room.doc,
+              triggerAction: 'restore',
+              prisma: options.prisma,
+            });
+
+            // 10. Load and validate the requested historical snapshot from PostgreSQL
+            const historicalSnapshot = await prisma.versionSnapshot.findUnique({
+              where: { id: versionId },
+              include: {
+                createdBy: {
+                  select: { id: true, name: true, email: true },
+                },
+              },
+            });
+
+            if (!historicalSnapshot || historicalSnapshot.pageId !== pageId) {
+              res.writeHead(404, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'Historical version snapshot not found for document' }));
+              return;
+            }
+
+            if (!historicalSnapshot.yjsState || historicalSnapshot.yjsState.length === 0) {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'Historical snapshot does not contain binary Yjs state' }));
+              return;
+            }
+
+            // 11. Replace active Yjs document content in verified 'restore' transaction
+            const tempDoc = new Y.Doc();
+            try {
+              Y.applyUpdate(tempDoc, new Uint8Array(historicalSnapshot.yjsState));
+              replaceDocXmlFragment(room.doc, tempDoc);
+            } finally {
+              tempDoc.destroy();
+            }
+
+            // 12. Immediately persist restored state to PostgreSQL DocumentState and Page.content
+            const saveResult = await flushSave(pageId, room.doc, { prisma: options.prisma, collabRedis });
+            room.lastSavedVersion = saveResult.stateVersion;
+            room.hasUnsavedChanges = false;
+
+            broadcastSaveStatus(room, {
+              type: 'save_status',
+              status: 'saved',
+              pageId,
+              stateVersion: saveResult.stateVersion,
+              savedAt: new Date().toISOString(),
+            });
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              success: true,
+              pageId,
+              restoredVersionId: historicalSnapshot.id,
+              recoverySnapshotId: recoverySnapshot.id,
+              stateVersion: saveResult.stateVersion,
+            }));
+          } catch (err) {
+            console.error(`[CollabServer] Error during restore for "${pageId}":`, err.message);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              success: false,
+              error: 'Failed to restore document',
+              detail: err.message,
+            }));
+          } finally {
+            if (distRestoreLock && typeof distRestoreLock.release === 'function') {
+              try {
+                await distRestoreLock.release();
+              } catch {}
+            }
+            unlock();
+            if (restoreLocks.get(pageId) === lockPromise) {
+              restoreLocks.delete(pageId);
+            }
+          }
+          return;
+        }
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Internal RPC endpoint not found' }));
+        return;
+      }
+
+      // Default fallback
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('Not Found');
+    } catch (err) {
+      console.error('[CollabServer] Unhandled HTTP error:', err);
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Internal Server Error' }));
+      }
+    }
+  });
+
+  // WebSocket Server (noServer mode to handle custom upgrade authorization)
+  // Cap individual Yjs/control WS frames at 2 MiB to mitigate memory exhaustion
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 2 * 1024 * 1024 });
+
+  // Server-side WebSocket heartbeat to clean up half-open TCP sockets (proxies/dropped Wi-Fi)
+  const heartbeatIntervalMs = 30000;
+  const heartbeatInterval = setInterval(() => {
+    for (const client of wss.clients) {
+      if (client.isAlive === false) {
+        try {
+          client.terminate();
+        } catch {}
+        continue;
+      }
+      client.isAlive = false;
+      try {
+        client.ping();
+      } catch {}
+    }
+  }, heartbeatIntervalMs);
+  if (typeof heartbeatInterval.unref === 'function') {
+    heartbeatInterval.unref();
+  }
+
+  function isOriginAuthorized(rawOrigin, req, socket) {
+    if (!rawOrigin) return true;
+
+    const normalizedReqOrigin = normalizeOrigin(rawOrigin);
+    if (!normalizedReqOrigin) return false;
+
+    // 1. Direct match in static / configured allowlist
+    if (allowedOrigins.includes(normalizedReqOrigin)) {
+      return true;
+    }
+
+    // 2. Validate forwarded headers ONLY from the known reverse-proxy ingress (loopback)
+    const remoteAddress = socket?.remoteAddress;
+    const isKnownProxyIngress =
+      remoteAddress === '127.0.0.1' ||
+      remoteAddress === '::1' ||
+      remoteAddress === '::ffff:127.0.0.1';
+
+    if (isKnownProxyIngress) {
+      // In production behind local supervisor proxy (prod-entrypoint.mjs),
+      // verify forwarded host against authorized domains.
+      // Do NOT blindly trust arbitrary client-supplied forwarded headers.
+      const forwardedHost = (req.headers['x-forwarded-host'] || req.headers.host || '').trim();
+      const forwardedProto = (req.headers['x-forwarded-proto'] || 'https').trim();
+
+      if (forwardedHost) {
+        const candidateOrigins = [
+          normalizeOrigin(`${forwardedProto}://${forwardedHost}`),
+          normalizeOrigin(`https://${forwardedHost}`),
+          normalizeOrigin(`http://${forwardedHost}`),
+        ];
+
+        if (candidateOrigins.includes(normalizedReqOrigin)) {
+          const hostOnly = forwardedHost.split(':')[0].toLowerCase();
+          const isAuthorizedHost = allowedOrigins.some((allowed) => {
+            try {
+              return new URL(allowed).hostname.toLowerCase() === hostOnly;
+            } catch {
+              return false;
+            }
+          });
+          if (isAuthorizedHost) {
+            return true;
+          }
+        }
+      }
+    }
+
+    return false;
+  }
+
+  // HTTP Upgrade Handler: Origin validation and URL path inspection
+  server.on('upgrade', (req, socket, head) => {
+    const origin = req.headers['origin'];
+
+    // Reject untrusted origin if present
+    if (!isOriginAuthorized(origin, req, socket)) {
+      console.warn(`[CollabServer] Upgrade rejected: Untrusted Origin "${origin}"`);
+      socket.write(
+        'HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Type: text/plain\r\n\r\nForbidden: Untrusted Origin\r\n'
+      );
+      socket.destroy();
+      return;
+    }
+
+    const hostHeader = req.headers.host || 'localhost';
+    const parsedUrl = new URL(req.url, `http://${hostHeader}`);
+
+    // Strictly forbid JWT tokens in the URL parameters
+    if (
+      parsedUrl.searchParams.has('token') ||
+      parsedUrl.searchParams.has('jwt') ||
+      parsedUrl.searchParams.has('auth')
+    ) {
+      console.warn('[CollabServer] Upgrade rejected: Token in URL query string is forbidden.');
+      socket.write(
+        'HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Type: text/plain\r\n\r\nBad Request: Tokens in URL forbidden\r\n'
+      );
+      socket.destroy();
+      return;
+    }
+
+    // Extract pageId from path: /:pageId, /rooms/:pageId, /collab-ws/:pageId, or query param
+    const rawSegments = parsedUrl.pathname.replace(/^\/+/, '').split('/').filter(Boolean);
+    const segments = rawSegments[0] === 'collab-ws' ? rawSegments.slice(1) : rawSegments;
+    let pageId = null;
+
+    if (segments.length > 0) {
+      if ((segments[0] === 'room' || segments[0] === 'rooms') && segments.length > 1) {
+        pageId = segments[1];
+      } else {
+        pageId = segments[0];
+      }
+    } else if (parsedUrl.searchParams.has('room') || parsedUrl.searchParams.has('pageId')) {
+      pageId = parsedUrl.searchParams.get('room') || parsedUrl.searchParams.get('pageId');
+    }
+
+    if (!pageId || !/^[a-zA-Z0-9._:-]{1,128}$/.test(pageId)) {
+      console.warn('[CollabServer] Upgrade rejected: Invalid or missing pageId in URL.');
+      socket.write(
+        'HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Type: text/plain\r\n\r\nBad Request: Invalid room pageId\r\n'
+      );
+      socket.destroy();
+      return;
+    }
+
+    // Upgrade socket and emit connection with target pageId
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit('connection', ws, req, pageId);
+    });
+  });
+
+  // WebSocket Connection Handler
+  const MAX_PENDING_PRE_AUTH_FRAMES = 50;
+  wss.on('connection', (ws, req, pageId) => {
+    ws.isCollabAuthenticated = false;
+    ws.isAlive = true;
+    ws.pageId = pageId;
+
+    ws.on('pong', () => {
+      ws.isAlive = true;
+    });
+
+    // Strict 5-second First-Message Authentication Gate
+    const authTimer = setTimeout(() => {
+      if (!ws.isCollabAuthenticated) {
+        console.warn(`[CollabServer] Auth timeout expired for connection on room "${pageId}"`);
+        sendPermissionDenied(ws, 'Authentication timeout: No token received within 5 seconds');
+        try {
+          ws.close(4401, 'Authentication timeout');
+        } catch {}
+        ws.terminate();
+      }
+    }, authTimeoutMs);
+
+    let isAuthenticating = false;
+    const pendingPreAuthQueue = [];
+
+    // Initial message handler for authentication
+    ws.on('message', async (data, isBinary) => {
+      ws.isAlive = true;
+      if (!ws.isCollabAuthenticated) {
+        if (isAuthenticating) {
+          // If auth is already in flight, queue bounded incoming traffic until verification resolves
+          if (pendingPreAuthQueue.length >= MAX_PENDING_PRE_AUTH_FRAMES) {
+            pendingPreAuthQueue.length = 0;
+            try {
+              ws.close(1008, 'Pre-authentication queue limit exceeded');
+            } catch {}
+            ws.terminate();
+            return;
+          }
+          pendingPreAuthQueue.push({ data, isBinary });
+          return;
+        }
+
+        isAuthenticating = true;
+        await handleFirstMessageAuth(ws, data, isBinary, pageId, authTimer);
+        isAuthenticating = false;
+
+        // If authenticated successfully, flush any traffic that arrived during the verification window
+        if (ws.isCollabAuthenticated) {
+          while (pendingPreAuthQueue.length > 0) {
+            const next = pendingPreAuthQueue.shift();
+            if (next) {
+              handleRoomMessage(ws, next.data, next.isBinary, pageId);
+            }
+          }
+        } else {
+          pendingPreAuthQueue.length = 0;
+        }
+      } else {
+        handleRoomMessage(ws, data, isBinary, pageId);
+      }
+    });
+
+    // Cleanup on disconnect
+    ws.on('close', () => {
+      clearTimeout(authTimer);
+      pendingPreAuthQueue.length = 0;
+      if (ws.isCollabAuthenticated) {
+        handleClientDisconnect(ws, pageId);
+      }
+    });
+
+    ws.on('error', (err) => {
+      clearTimeout(authTimer);
+      pendingPreAuthQueue.length = 0;
+      console.error(`[CollabServer] Socket error on room "${pageId}":`, err.message);
+    });
+  });
+
+  /**
+   * Evaluates first message from client for valid collaboration authentication.
+   */
+  async function handleFirstMessageAuth(ws, data, isBinary, pageId, authTimer) {
+    let token = null;
+    let isJson = false;
+
+    // 1. Text / JSON frame
+    if (typeof data === 'string') {
+      try {
+        const json = JSON.parse(data);
+        if (json && typeof json.token === 'string') {
+          token = json.token;
+          isJson = true;
+        }
+      } catch {}
+    } else if (Buffer.isBuffer(data) || data instanceof Uint8Array) {
+      // 2. Buffer containing JSON string
+      try {
+        const str = Buffer.from(data).toString('utf8');
+        if (str.trim().startsWith('{')) {
+          const json = JSON.parse(str);
+          if (json && typeof json.token === 'string') {
+            token = json.token;
+            isJson = true;
+          }
+        }
+      } catch {}
+
+      // 3. Binary frame starting with MESSAGE_AUTH (2)
+      if (!token) {
+        try {
+          const decoder = decoding.createDecoder(new Uint8Array(data));
+          const msgType = decoding.readVarUint(decoder);
+          if (msgType === MESSAGE_AUTH) {
+            token = decoding.readVarString(decoder);
+          }
+        } catch {}
+      }
+    }
+
+    // Reject non-auth initial messages
+    if (!token) {
+      clearTimeout(authTimer);
+      console.warn(`[CollabServer] Non-auth message received before authenticating on room "${pageId}". Rejecting.`);
+      sendPermissionDenied(ws, 'Unauthenticated: First message must be authentication frame');
+      try {
+        ws.close(4401, 'Unauthenticated: Authentication token required');
+      } catch {}
+      ws.terminate();
+      return;
+    }
+
+    // Verify token with Jose
+    let payload;
+    try {
+      payload = await verifyCollabToken(token, options.authSecret);
+    } catch (err) {
+      clearTimeout(authTimer);
+      console.warn(`[CollabServer] JWT verification failed on room "${pageId}":`, err.message);
+      sendPermissionDenied(ws, `Invalid or expired token: ${err.message}`);
+      try {
+        ws.close(4401, 'Invalid or expired collaboration token');
+      } catch {}
+      ws.terminate();
+      return;
+    }
+
+    // Validate pageId match
+    if (payload.pageId !== pageId) {
+      clearTimeout(authTimer);
+      console.warn(`[CollabServer] PageId mismatch: token has "${payload.pageId}", requested "${pageId}"`);
+      sendPermissionDenied(ws, 'Unauthorized: Token pageId does not match room');
+      try {
+        ws.close(4403, 'Unauthorized: Token pageId mismatch');
+      } catch {}
+      ws.terminate();
+      return;
+    }
+
+    // Validate role authorization: all four workspace roles allowed
+    const validRoles = ['OWNER', 'EDITOR', 'COMMENTER', 'VIEWER'];
+    if (!validRoles.includes(payload.role)) {
+      clearTimeout(authTimer);
+      console.warn(`[CollabServer] Role rejected: "${payload.role}" on room "${pageId}"`);
+      sendPermissionDenied(ws, `Forbidden: Role ${payload.role} is not permitted to collaborate`);
+      try {
+        ws.close(4403, `Forbidden: Role ${payload.role} not permitted`);
+      } catch {}
+      ws.terminate();
+      return;
+    }
+
+    // Authentication succeeded
+    clearTimeout(authTimer);
+    ws.isCollabAuthenticated = true;
+    ws.collabUser = {
+      userId: payload.sub,
+      userName: payload.userName,
+      role: payload.role,
+      workspaceId: payload.workspaceId,
+    };
+
+    let room;
+    try {
+      room = await getOrCreateRoom(pageId);
+    } catch (err) {
+      console.error(`[CollabServer] Room hydration failed for "${pageId}":`, err.message);
+      sendPermissionDenied(ws, 'Internal Error: Document state hydration failed');
+      try {
+        ws.close(1011, 'Document state hydration failed');
+      } catch {}
+      ws.terminate();
+      return;
+    }
+    room.clients.add(ws);
+
+    // Cancel pending cleanup timer if client connected
+    if (room.cleanupTimer) {
+      clearTimeout(room.cleanupTimer);
+      room.cleanupTimer = null;
+      console.log(`[CollabServer] Canceled cleanup timer for room "${pageId}". Active clients: ${room.clients.size}`);
+    }
+
+    console.log(
+      `[CollabServer] Authenticated user "${payload.userName}" (${payload.role}) in room "${pageId}". Total clients: ${room.clients.size}`
+    );
+
+    // Send JSON acknowledgment if client authenticated via JSON
+    if (isJson) {
+      try {
+        ws.send(
+          JSON.stringify({
+            type: 'authenticated',
+            pageId,
+            user: ws.collabUser,
+            stateVersion: room.lastSavedVersion,
+            saveStatus: room.hasUnsavedChanges ? 'saving' : 'saved',
+          })
+        );
+      } catch {}
+    }
+
+    // Always send initial save_status frame to authenticated client
+    try {
+      ws.send(
+        JSON.stringify({
+          type: 'save_status',
+          status: room.hasUnsavedChanges ? 'saving' : 'saved',
+          pageId,
+          stateVersion: room.lastSavedVersion,
+        })
+      );
+    } catch {}
+
+    // Initiate Yjs sync: Send server's Sync Step 1
+    try {
+      const encoder = encoding.createEncoder();
+      encoding.writeVarUint(encoder, MESSAGE_SYNC);
+      syncProtocol.writeSyncStep1(encoder, room.doc);
+      ws.send(encoding.toUint8Array(encoder), { binary: true });
+    } catch (err) {
+      console.error(`[CollabServer] Error sending sync step 1 in room "${pageId}":`, err);
+    }
+
+    // Send existing awareness states if any exist
+    try {
+      const awarenessStates = room.awareness.getStates();
+      if (awarenessStates.size > 0) {
+        const awarenessEncoder = encoding.createEncoder();
+        encoding.writeVarUint(awarenessEncoder, MESSAGE_AWARENESS);
+        encoding.writeVarUint8Array(
+          awarenessEncoder,
+          awarenessProtocol.encodeAwarenessUpdate(
+            room.awareness,
+            Array.from(awarenessStates.keys())
+          )
+        );
+        ws.send(encoding.toUint8Array(awarenessEncoder), { binary: true });
+      }
+    } catch (err) {
+      console.error(`[CollabServer] Error sending awareness states in room "${pageId}":`, err);
+    }
+  }
+
+  /**
+   * Handles binary and control messages from authenticated clients.
+   */
+  function handleRoomMessage(ws, data, isBinary, pageId) {
+    const room = rooms.get(pageId);
+    if (!room) {
+      console.warn(`[CollabServer] Message for non-existent room "${pageId}"`);
+      return;
+    }
+
+    // Check for JSON control frames (ws passes text frames with isBinary === false and Buffer data)
+    if (typeof data === 'string' || !isBinary) {
+      try {
+        const parsed =
+          typeof data === 'string'
+            ? JSON.parse(data)
+            : Buffer.isBuffer(data) || data instanceof Uint8Array || data instanceof ArrayBuffer
+              ? JSON.parse(Buffer.from(data).toString('utf8'))
+              : data;
+        if (parsed.type === 'ping') {
+          ws.send(JSON.stringify({ type: 'pong' }));
+        } else if (parsed.type === 'save_retry') {
+          const userRole = ws.collabUser?.role;
+          if (userRole !== 'OWNER' && userRole !== 'EDITOR') {
+            sendPermissionDenied(ws, 'Read-only roles cannot trigger manual document saves');
+            return;
+          }
+          broadcastSaveStatus(room, {
+            type: 'save_status',
+            status: 'saving',
+            pageId,
+          });
+          scheduleSave(pageId, room.doc, { prisma: options.prisma, collabRedis })
+            .then((saveResult) => {
+              room.lastSavedVersion = saveResult.stateVersion;
+              if (!hasPendingSave(pageId)) {
+                room.hasUnsavedChanges = false;
+                broadcastSaveStatus(room, {
+                  type: 'save_status',
+                  status: 'saved',
+                  pageId,
+                  stateVersion: saveResult.stateVersion,
+                  savedAt: new Date().toISOString(),
+                });
+              }
+            })
+            .catch((err) => {
+              console.error(`[CollabServer] Retry save error for room "${pageId}":`, err.message);
+              broadcastSaveStatus(room, {
+                type: 'save_status',
+                status: 'error',
+                pageId,
+                error: 'Failed to persist document to storage',
+              });
+            });
+        }
+      } catch {}
+      return;
+    }
+
+    try {
+      const uint8 = new Uint8Array(data);
+      const decoder = decoding.createDecoder(uint8);
+      const messageType = decoding.readVarUint(decoder);
+
+      switch (messageType) {
+        case MESSAGE_SYNC: {
+          const syncMessageType = decoding.readVarUint(decoder);
+          const isReadOnly = ws.collabUser?.role === 'COMMENTER' || ws.collabUser?.role === 'VIEWER';
+
+          if (syncMessageType === syncProtocol.messageYjsSyncStep1) {
+            // Sync Step 1: Handshake requesting missing document state
+            // Permitted for ALL roles so read-only users receive the document
+            const replyEncoder = encoding.createEncoder();
+            encoding.writeVarUint(replyEncoder, MESSAGE_SYNC);
+            syncProtocol.readSyncStep1(decoder, replyEncoder, room.doc);
+            if (encoding.length(replyEncoder) > 1) {
+              ws.send(encoding.toUint8Array(replyEncoder), { binary: true });
+            }
+          } else if (syncMessageType === syncProtocol.messageYjsSyncStep2) {
+            // Sync Step 2: Client returning state in response to server's Step 1
+            if (isReadOnly) {
+              const updateBytes = decoding.readVarUint8Array(decoder);
+              if (updateBytes.length > 2) {
+                console.warn(
+                  `[CollabServer] Dropped unauthorized SyncStep2 update (${updateBytes.length} bytes) from read-only user "${ws.collabUser?.userName}" (${ws.collabUser?.role}) in room "${pageId}"`
+                );
+                sendPermissionDenied(
+                  ws,
+                  `Forbidden: Read-only role ${ws.collabUser?.role} cannot submit document changes.`
+                );
+                try {
+                  ws.send(
+                    JSON.stringify({
+                      type: 'permission_denied',
+                      reason: `Forbidden: Read-only role ${ws.collabUser?.role} cannot submit document changes.`,
+                      role: ws.collabUser?.role,
+                    })
+                  );
+                } catch {}
+              }
+            } else {
+              // OWNER or EDITOR: apply update to room.doc
+              syncProtocol.readSyncStep2(decoder, room.doc, ws);
+            }
+          } else if (syncMessageType === syncProtocol.messageYjsUpdate) {
+            // Incremental document update
+            if (isReadOnly) {
+              const updateBytes = decoding.readVarUint8Array(decoder);
+              console.warn(
+                `[CollabServer] Dropped unauthorized Yjs update (${updateBytes.length} bytes) from read-only user "${ws.collabUser?.userName}" (${ws.collabUser?.role}) in room "${pageId}"`
+              );
+              sendPermissionDenied(
+                ws,
+                `Forbidden: Read-only role ${ws.collabUser?.role} cannot submit document changes.`
+              );
+              try {
+                ws.send(
+                  JSON.stringify({
+                    type: 'permission_denied',
+                    reason: `Forbidden: Read-only role ${ws.collabUser?.role} cannot submit document changes.`,
+                    role: ws.collabUser?.role,
+                  })
+                );
+              } catch {}
+            } else {
+              // OWNER or EDITOR: apply update to room.doc
+              syncProtocol.readUpdate(decoder, room.doc, ws);
+            }
+          } else {
+            console.warn(`[CollabServer] Unknown sync message type ${syncMessageType} in room "${pageId}"`);
+          }
+          break;
+        }
+        case MESSAGE_AWARENESS: {
+          const rawAwarenessUpdate = decoding.readVarUint8Array(decoder);
+          let sanitizedAwarenessUpdate = rawAwarenessUpdate;
+
+          // Enforce server-side identity binding using verified JWT credentials
+          if (ws.collabUser) {
+            try {
+              sanitizedAwarenessUpdate = sanitizeAwarenessUpdate(rawAwarenessUpdate, ws.collabUser);
+            } catch (err) {
+              console.error(`[CollabServer] Error sanitizing awareness update in room "${pageId}":`, err.message);
+            }
+          }
+
+          // Track controlled client IDs for this connection to enable immediate disconnect cleanup
+          try {
+            const updateDecoder = decoding.createDecoder(sanitizedAwarenessUpdate);
+            const updateLen = decoding.readVarUint(updateDecoder);
+            for (let i = 0; i < updateLen; i++) {
+              const clientID = decoding.readVarUint(updateDecoder);
+              decoding.readVarUint(updateDecoder); // skip clock
+              const stateStr = decoding.readVarString(updateDecoder);
+              if (!ws.collabAwarenessClientIds) {
+                ws.collabAwarenessClientIds = new Set();
+              }
+              if (stateStr === 'null') {
+                ws.collabAwarenessClientIds.delete(clientID);
+              } else {
+                ws.collabAwarenessClientIds.add(clientID);
+              }
+            }
+          } catch {}
+
+          awarenessProtocol.applyAwarenessUpdate(
+            room.awareness,
+            sanitizedAwarenessUpdate,
+            ws
+          );
+          break;
+        }
+        case MESSAGE_QUERY_AWARENESS: {
+          const replyEncoder = encoding.createEncoder();
+          encoding.writeVarUint(replyEncoder, MESSAGE_AWARENESS);
+          encoding.writeVarUint8Array(
+            replyEncoder,
+            awarenessProtocol.encodeAwarenessUpdate(
+              room.awareness,
+              Array.from(room.awareness.getStates().keys())
+            )
+          );
+          ws.send(encoding.toUint8Array(replyEncoder), { binary: true });
+          break;
+        }
+        default:
+          console.warn(`[CollabServer] Unknown message type ${messageType} in room "${pageId}"`);
+          break;
+      }
+    } catch (err) {
+      console.error(`[CollabServer] Error handling room message in room "${pageId}":`, err);
+    }
+  }
+
+  /**
+   * Handles client disconnect and schedules room cleanup when room becomes empty.
+   */
+  function handleClientDisconnect(ws, pageId) {
+    const room = rooms.get(pageId);
+    if (!room) return;
+
+    room.clients.delete(ws);
+    console.log(
+      `[CollabServer] Client disconnected from room "${pageId}". Remaining clients: ${room.clients.size}`
+    );
+
+    // Immediately remove this connection's awareness states to prevent ghost cursors and stale avatars
+    if (ws.collabAwarenessClientIds && ws.collabAwarenessClientIds.size > 0) {
+      const clientIdsToRemove = Array.from(ws.collabAwarenessClientIds);
+      try {
+        awarenessProtocol.removeAwarenessStates(
+          room.awareness,
+          clientIdsToRemove,
+          null
+        );
+      } catch (err) {
+        console.error(`[CollabServer] Error removing awareness states for room "${pageId}":`, err);
+      }
+      ws.collabAwarenessClientIds.clear();
+    }
+
+    // When last client leaves, schedule room disposal after grace period (if server is not shutting down)
+    if (room.clients.size === 0 && !isShuttingDown && !room.isDestroyed) {
+      console.log(
+        `[CollabServer] Room "${pageId}" is empty. Starting ${cleanupGraceMs}ms cleanup timer.`
+      );
+      room.cleanupTimer = setTimeout(async () => {
+        if (room.clients.size === 0) {
+          console.log(`[CollabServer] Room cleanup timer expired. Flushing and destroying room "${pageId}".`);
+          try {
+            if (room.hasUnsavedChanges || room.hasRemoteEdits || hasPendingSave(pageId)) {
+              await flushSave(pageId, room.doc, { prisma: options.prisma, collabRedis });
+              console.log(`[CollabServer] Successfully flushed state for room "${pageId}" before disposal.`);
+            }
+            if (room.redisUnsubscribe) {
+              try {
+                room.redisUnsubscribe();
+              } catch {}
+              room.redisUnsubscribe = null;
+            }
+            room.isDestroyed = true;
+            room.awareness.destroy();
+            room.doc.destroy();
+            rooms.delete(pageId);
+          } catch (err) {
+            console.error(`[CollabServer] Failed flushing state during room destruction for "${pageId}":`, err.message);
+            // If the failure is because the page was deleted in DB (foreign key error), prune room to prevent memory leak
+            if (
+              err.code === 'P2003' ||
+              (err.message && (err.message.includes('Foreign key') || err.message.includes('foreign key')))
+            ) {
+              if (room.redisUnsubscribe) {
+                try {
+                  room.redisUnsubscribe();
+                } catch {}
+                room.redisUnsubscribe = null;
+              }
+              room.isDestroyed = true;
+              room.awareness.destroy();
+              room.doc.destroy();
+              rooms.delete(pageId);
+            }
+            // Retain room in memory for transient connection failures so pending changes are not lost
+          }
+        }
+      }, cleanupGraceMs);
+    }
+  }
+
+  /**
+   * Starts listening on the configured port and host.
+   */
+  async function start() {
+    if (collabRedis && collabRedis.enabled) {
+      try {
+        await collabRedis.connect();
+      } catch (err) {
+        console.error(`[CollabServer] Redis connection failed on startup for instance "${instanceId}":`, err.message);
+      }
+    }
+
+    return new Promise((resolve, reject) => {
+      const onError = (err) => {
+        server.off('listening', onListening);
+        reject(err);
+      };
+      const onListening = () => {
+        server.off('error', onError);
+        const boundHost = host || 'dual-stack (0.0.0.0 / ::)';
+        logStructured('info', 'collab_server.started', {
+          port,
+          host: boundHost,
+          instanceId,
+          redisEnabled: Boolean(collabRedis && collabRedis.enabled),
+        });
+        console.log(`[CollabServer] Yjs WebSocket server listening on port ${port} (${boundHost}) [instance: ${instanceId}]`);
+        console.log(`[CollabServer] Allowed Origins: ${allowedOrigins.join(', ')}`);
+        console.log(`[CollabServer] Auth Timeout: ${authTimeoutMs}ms | Cleanup Grace: ${cleanupGraceMs}ms`);
+        if (collabRedis && collabRedis.enabled) {
+          console.log(`[CollabServer] Redis Pub/Sub enabled (status: ${collabRedis.status})`);
+        }
+        resolve({ server, port, host, instanceId });
+      };
+
+      server.once('error', onError);
+      if (host) {
+        server.listen(port, host, onListening);
+      } else {
+        server.listen(port, onListening);
+      }
+    });
+  }
+
+  /**
+   * Gracefully shuts down the server, closing all sockets and rooms.
+   */
+  async function close() {
+    isShuttingDown = true;
+    clearInterval(heartbeatInterval);
+
+    // 1. Clear room cleanup timers
+    for (const room of rooms.values()) {
+      if (room.cleanupTimer) {
+        clearTimeout(room.cleanupTimer);
+        room.cleanupTimer = null;
+      }
+    }
+
+    // 2. Disconnect active clients gracefully and remove awareness
+    for (const room of rooms.values()) {
+      const allControlledClients = [];
+      for (const client of room.clients) {
+        if (client.collabAwarenessClientIds && client.collabAwarenessClientIds.size > 0) {
+          allControlledClients.push(...client.collabAwarenessClientIds);
+          client.collabAwarenessClientIds.clear();
+        }
+        try {
+          client.close(1001, 'Server shutting down');
+        } catch {}
+      }
+      if (allControlledClients.length > 0 && !room.isDestroyed && room.awareness) {
+        try {
+          awarenessProtocol.removeAwarenessStates(room.awareness, allControlledClients, null);
+        } catch {}
+      }
+    }
+
+    // 3. Flush all active rooms with unsaved edits to PostgreSQL in parallel
+    const flushPromises = [];
+    for (const [pageId, room] of rooms.entries()) {
+      if (room.hasUnsavedChanges || hasPendingSave(pageId)) {
+        flushPromises.push(
+          flushSave(pageId, room.doc, { prisma: options.prisma, collabRedis })
+            .then((flushResult) => {
+              if (flushResult) {
+                room.lastSavedVersion = flushResult.stateVersion;
+                room.hasUnsavedChanges = false;
+              }
+              console.log(`[CollabServer] Flushed room "${pageId}" on shutdown.`);
+              return flushResult;
+            })
+            .catch((err) => {
+              console.error(`[CollabServer] Error flushing room "${pageId}" on shutdown:`, err.message);
+              throw err;
+            })
+        );
+      }
+    }
+    const flushResults = await Promise.allSettled(flushPromises);
+    const failedFlushes = flushResults.filter((r) => r.status === 'rejected');
+    if (failedFlushes.length > 0) {
+      console.warn(`[CollabServer] ${failedFlushes.length} room(s) failed to flush during shutdown.`);
+    }
+
+    // 4. Destroy room CRDTs and unsubscribe from Redis
+    for (const room of rooms.values()) {
+      if (room.redisUnsubscribe) {
+        try {
+          room.redisUnsubscribe();
+        } catch {}
+        room.redisUnsubscribe = null;
+      }
+      try {
+        room.isDestroyed = true;
+        room.awareness.destroy();
+        room.doc.destroy();
+      } catch {}
+    }
+    rooms.clear();
+    if (globalThis.__collabRooms === rooms) {
+      delete globalThis.__collabRooms;
+    }
+
+    // 5. Close Redis clients
+    if (collabRedis && collabRedis.enabled) {
+      try {
+        await collabRedis.close();
+      } catch (err) {
+        console.warn('[CollabServer] Error closing Redis client during shutdown:', err.message);
+      }
+    }
+
+    // 6. Close WebSocket server and HTTP server without hanging on idle keep-alive sockets
+    await new Promise((resolve) => {
+      const finishTimer = setTimeout(() => {
+        for (const wsClient of wss.clients) {
+          try {
+            wsClient.terminate();
+          } catch {}
+        }
+        server.closeAllConnections?.();
+        resolve();
+      }, 2500);
+
+      wss.close(() => {
+        server.close(() => {
+          clearTimeout(finishTimer);
+          resolve();
+        });
+        server.closeIdleConnections?.();
+      });
+    });
+
+    // 7. Close persistence pool if requested
+    if (options.closePersistence === true) {
+      await closePersistence();
+    }
+    console.log('[CollabServer] Server shutdown complete.');
+  }
+
+  return {
+    server,
+    wss,
+    rooms,
+    port,
+    host,
+    instanceId,
+    collabRedis,
+    start,
+    close,
+  };
+}
+
+/**
+ * Convenience runner to start the server.
+ */
+export async function startCollabServer(options = {}) {
+  const instance = createCollabServer(options);
+  await instance.start();
+  return instance;
+}
+
+// Auto-run if executed directly as entrypoint
+function isDirectExecution() {
+  if (!process.argv[1]) return false;
+  try {
+    return path.resolve(import.meta.filename).toLowerCase() === path.resolve(process.argv[1]).toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectExecution()) {
+  const serverInstance = createCollabServer({ closePersistence: true });
+  let exitInProgress = false;
+  const gracefulExit = async (signal) => {
+    if (exitInProgress) return;
+    exitInProgress = true;
+    logStructured('info', 'collab_server.shutdown_signal', { signal });
+    console.log(`[CollabServer] Received ${signal}. Initiating graceful shutdown...`);
+    let hadError = false;
+    try {
+      await serverInstance.close();
+    } catch (err) {
+      hadError = true;
+      logStructured('error', 'collab_server.shutdown_error', { error: err });
+      console.error('[CollabServer] Error during shutdown:', err);
+    }
+    process.exit(hadError ? 1 : 0);
+  };
+
+  process.on('SIGINT', () => gracefulExit('SIGINT'));
+  process.on('SIGTERM', () => gracefulExit('SIGTERM'));
+
+  serverInstance.start().catch((err) => {
+    logStructured('error', 'collab_server.startup_error', { error: err });
+    console.error('[CollabServer] Fatal startup error:', err);
+    process.exit(1);
+  });
+}
