@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ShopNest — Multi-Vendor E-Commerce Platform</title>
+    <meta name="description" content="ShopNest is a modern multi-vendor e-commerce platform connecting independent brands with shoppers, featuring unified multi-store checkout, automated split transfers, and real-time order tracking." />
+    <meta property="og:title" content="ShopNest — Multi-Vendor E-Commerce Platform" />
+    <meta property="og:description" content="Discover independent brands, enjoy unified multi-vendor checkout, and track shipments in one seamless shopping experience." />
+    <meta property="og:type" content="website" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="theme-color" content="#F0F9FF" id="meta-theme-color" />
+    <script>
+      (function() {
+        try {
+          var saved = localStorage.getItem('theme');
+          var theme = (saved === 'light' || saved === 'dark') ? saved : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+          document.documentElement.setAttribute('data-theme', theme);
+          var meta = document.getElementById('meta-theme-color');
+          if (meta) meta.setAttribute('content', theme === 'dark' ? '#0B1220' : '#F0F9FF');
+        } catch (e) {}
+      })();
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
