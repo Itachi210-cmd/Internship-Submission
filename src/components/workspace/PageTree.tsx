@@ -285,6 +285,18 @@ function PageTreeInner({ workspaceId, userRole }: PageTreeProps) {
               });
               router.push(`/workspace/${workspaceId}`);
             }
+          } else if (event.type === "WORKSPACE_DELETED" && event.workspaceId === workspaceId) {
+            try {
+              if (typeof window !== "undefined" && localStorage.getItem("collab-active-workspace-id") === workspaceId) {
+                localStorage.removeItem("collab-active-workspace-id");
+              }
+            } catch {}
+            addToast({
+              message: "Workspace deleted",
+              description: "This workspace has been permanently deleted by its owner.",
+              variant: "info",
+            });
+            router.push("/dashboard");
           }
         } catch {
           // Ignore non-JSON heartbeat pings

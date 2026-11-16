@@ -7,7 +7,8 @@ export type WorkspacePageEventType =
   | "PAGE_DELETED"
   | "COMMENT_CREATED"
   | "COMMENT_UPDATED"
-  | "COMMENT_DELETED";
+  | "COMMENT_DELETED"
+  | "WORKSPACE_DELETED";
 
 export interface PageCreatedPayload {
   type: "PAGE_CREATED";
@@ -68,13 +69,19 @@ export interface CommentDeletedPayload {
   commentId: string;
 }
 
+export interface WorkspaceDeletedPayload {
+  type: "WORKSPACE_DELETED";
+  workspaceId: string;
+}
+
 export type WorkspacePageEvent =
   | PageCreatedPayload
   | PageUpdatedPayload
   | PageDeletedPayload
   | CommentCreatedPayload
   | CommentUpdatedPayload
-  | CommentDeletedPayload;
+  | CommentDeletedPayload
+  | WorkspaceDeletedPayload;
 
 class WorkspaceEventEmitter extends EventEmitter {
   constructor() {

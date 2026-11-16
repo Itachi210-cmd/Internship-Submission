@@ -7,6 +7,8 @@ import {
   ChevronDown,
   Plus,
   Loader2,
+  Trash2,
+  AlertTriangle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Dialog } from "@/components/ui/Dialog";
@@ -17,6 +19,7 @@ import {
   WorkspaceSummary,
   getWorkspaces,
   createWorkspace,
+  deleteWorkspace,
 } from "@/lib/api/workspaces";
 
 interface WorkspaceSwitcherProps {
@@ -37,6 +40,9 @@ export function WorkspaceSwitcher({
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [newWorkspaceName, setNewWorkspaceName] = useState("");
   const [isCreating, setIsCreating] = useState(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deleteConfirmationInput, setDeleteConfirmationInput] = useState("");
+  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -118,6 +124,52 @@ export function WorkspaceSwitcher({
       });
     } finally {
       setIsCreating(false);
+    }
+  };
+
+  const isCurrentOwner = Boolean(
+    currentWorkspace &&
+      (currentWorkspace.isOwner || currentWorkspace.role === "OWNER")
+  );
+
+  const handleDeleteWorkspace = async () => {
+    if (!currentWorkspace || isDeleting) return;
+    if (deleteConfirmationInput.trim() !== currentWorkspace.name.trim()) return;
+
+    setIsDeleting(true);
+    try {
+      await deleteWorkspace(currentWorkspace.id);
+
+      try {
+        if (
+          typeof window !== "undefined" &&
+          localStorage.getItem("collab-active-workspace-id") === currentWorkspace.id
+        ) {
+          localStorage.removeItem("collab-active-workspace-id");
+        }
+      } catch {}
+
+      addToast({
+        message: "Workspace deleted",
+        description: `Workspace "${currentWorkspace.name}" has been permanently removed.`,
+        variant: "info",
+      });
+
+      setIsDeleteModalOpen(false);
+      setDeleteConfirmationInput("");
+
+      setWorkspaces((prev) => prev.filter((w) => w.id !== currentWorkspace.id));
+
+      router.push("/dashboard");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to delete workspace";
+      addToast({
+        message: "Error deleting workspace",
+        description: msg,
+        variant: "error",
+      });
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -214,12 +266,29 @@ export function WorkspaceSwitcher({
                   setIsDropdownOpen(false);
                   setIsCreateModalOpen(true);
                 }}
-                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md hover:bg-[var(--bg-hover)] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
+                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md hover:bg-[var(--bg-hover)] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5 text-[var(--text-faint)]" />
                 <span>Create workspace</span>
               </button>
             </div>
+
+            {isCurrentOwner && (
+              <div className="pt-1 mt-1 border-t border-[var(--border-subtle)]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsDropdownOpen(false);
+                    setDeleteConfirmationInput("");
+                    setIsDeleteModalOpen(true);
+                  }}
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 transition-colors text-left cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-red-500 shrink-0" />
+                  <span>Delete workspace</span>
+                </button>
+              </div>
+            )}
           </div>
         </>
       )}
@@ -269,6 +338,90 @@ export function WorkspaceSwitcher({
             autoFocus
           />
         </form>
+      </Dialog>
+
+      {/* Delete Workspace Confirmation Dialog */}
+      <Dialog
+        isOpen={isDeleteModalOpen}
+        onClose={() => {
+          if (!isDeleting) {
+            setIsDeleteModalOpen(false);
+            setDeleteConfirmationInput("");
+          }
+        }}
+        title="Delete Workspace"
+        description="This action is permanent and cannot be undone."
+        footer={
+          <>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                setIsDeleteModalOpen(false);
+                setDeleteConfirmationInput("");
+              }}
+              disabled={isDeleting}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              size="sm"
+              disabled={
+                !currentWorkspace ||
+                deleteConfirmationInput.trim() !== currentWorkspace.name.trim() ||
+                isDeleting
+              }
+              onClick={handleDeleteWorkspace}
+            >
+              {isDeleting ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                  <span>Deleting...</span>
+                </>
+              ) : (
+                "Delete Workspace"
+              )}
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 p-3 rounded-md bg-red-500/10 border border-red-500/20 text-xs text-red-700 dark:text-red-400">
+            <AlertTriangle className="w-4 h-4 shrink-0 text-red-500 mt-0.5" />
+            <div className="space-y-1">
+              <p className="font-semibold text-red-800 dark:text-red-300">
+                Warning: Irreversible Action
+              </p>
+              <p>
+                Deleting <strong className="font-semibold">{currentWorkspace?.name}</strong> will
+                permanently erase all documents, comments, version histories, and member access
+                associated with this workspace.
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <label
+              htmlFor="confirm-delete-input"
+              className="block text-xs text-[var(--text-muted)]"
+            >
+              To confirm deletion, please type{" "}
+              <span className="font-semibold text-[var(--text-primary)] font-mono">
+                {currentWorkspace?.name}
+              </span>{" "}
+              below:
+            </label>
+            <Input
+              id="confirm-delete-input"
+              placeholder={currentWorkspace?.name || "Workspace name"}
+              value={deleteConfirmationInput}
+              onChange={(e) => setDeleteConfirmationInput(e.target.value)}
+              disabled={isDeleting}
+              autoFocus
+            />
+          </div>
+        </div>
       </Dialog>
     </div>
   );

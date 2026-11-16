@@ -19,6 +19,84 @@ A Notion-style real-time collaborative document workspace powered by **Next.js 1
 
 ---
 
+## Screenshots
+
+<!-- SCREENSHOTS:START -->
+
+<details open>
+<summary><b>General</b></summary>
+<br>
+
+| Login page |
+| :---: |
+| <img src="docs/screenshots/general/login-page.png" alt="Login page" width="460"><br><sub><b>Login page</b></sub> |
+
+</details>
+
+<details>
+<summary><b>Workspace</b></summary>
+<br>
+
+| Dashboard workspace |
+| :---: |
+| <img src="docs/screenshots/workspace/dashboard-workspace.png" alt="Dashboard workspace" width="460"><br><sub><b>Dashboard workspace</b></sub> |
+
+</details>
+
+<details>
+<summary><b>Editor</b></summary>
+<br>
+
+| Rich text editor |
+| :---: |
+| <img src="docs/screenshots/editor/rich-text-editor.png" alt="Rich text editor" width="460"><br><sub><b>Rich text editor</b></sub> |
+
+</details>
+
+<details>
+<summary><b>Collaboration</b></summary>
+<br>
+
+| Real time collaboration |
+| :---: |
+| <img src="docs/screenshots/collaboration/real-time-collaboration.png" alt="Real time collaboration" width="460"><br><sub><b>Real time collaboration</b></sub> |
+
+</details>
+
+<details>
+<summary><b>Comments</b></summary>
+<br>
+
+| Comments notifications |
+| :---: |
+| <img src="docs/screenshots/comments/comments-notifications.png" alt="Comments notifications" width="460"><br><sub><b>Comments notifications</b></sub> |
+
+</details>
+
+<details>
+<summary><b>Version History</b></summary>
+<br>
+
+| Version history |
+| :---: |
+| <img src="docs/screenshots/version-history/version-history.png" alt="Version history" width="460"><br><sub><b>Version history</b></sub> |
+
+</details>
+
+<details>
+<summary><b>Sharing & Permissions</b></summary>
+<br>
+
+| Workspace sharing permissions |
+| :---: |
+| <img src="docs/screenshots/sharing-permissions/workspace-sharing-permissions.png" alt="Workspace sharing permissions" width="460"><br><sub><b>Workspace sharing permissions</b></sub> |
+
+</details>
+
+<!-- SCREENSHOTS:END -->
+
+---
+
 ## Technology Stack
 
 | Layer | Technology |

@@ -57,6 +57,7 @@ export default function DashboardPage() {
   const [renameValue, setRenameValue] = useState("");
 
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
+  const [confirmDeleteName, setConfirmDeleteName] = useState("");
 
   useEffect(() => {
     let isMounted = true;
@@ -147,15 +148,27 @@ export default function DashboardPage() {
 
   const handleDelete = async () => {
     if (!activeWs || isSubmitting) return;
+    if (confirmDeleteName.trim() !== activeWs.name.trim()) return;
 
     setIsSubmitting(true);
     try {
       await deleteWorkspace(activeWs.id);
+
+      try {
+        if (
+          typeof window !== "undefined" &&
+          localStorage.getItem("collab-active-workspace-id") === activeWs.id
+        ) {
+          localStorage.removeItem("collab-active-workspace-id");
+        }
+      } catch {}
+
       setWorkspaces((prev) => prev.filter((w) => w.id !== activeWs.id));
       setIsDeleteOpen(false);
+      setConfirmDeleteName("");
       addToast({
         message: "Workspace deleted",
-        description: `Workspace "${activeWs.name}" has been removed.`,
+        description: `Workspace "${activeWs.name}" has been permanently removed.`,
         variant: "info",
       });
     } catch (err: unknown) {
@@ -336,6 +349,7 @@ export default function DashboardPage() {
                           <button
                             onClick={() => {
                               setActiveWs(ws);
+                              setConfirmDeleteName("");
                               setIsDeleteOpen(true);
                             }}
                             className="p-1 rounded text-[var(--text-faint)] hover:text-red-500 hover:bg-red-500/10 transition-colors cursor-pointer"
@@ -476,15 +490,23 @@ export default function DashboardPage() {
       {/* Delete Workspace Confirmation Dialog */}
       <Dialog
         isOpen={isDeleteOpen}
-        onClose={() => !isSubmitting && setIsDeleteOpen(false)}
+        onClose={() => {
+          if (!isSubmitting) {
+            setIsDeleteOpen(false);
+            setConfirmDeleteName("");
+          }
+        }}
         title="Delete Workspace"
-        description={`Are you sure you want to permanently delete "${activeWs?.name}"? All associated documents and member records will be permanently removed.`}
+        description="This action is permanent and cannot be undone."
         footer={
           <>
             <Button
               variant="secondary"
               size="sm"
-              onClick={() => setIsDeleteOpen(false)}
+              onClick={() => {
+                setIsDeleteOpen(false);
+                setConfirmDeleteName("");
+              }}
               disabled={isSubmitting}
             >
               Cancel
@@ -493,7 +515,11 @@ export default function DashboardPage() {
               variant="danger"
               size="sm"
               onClick={handleDelete}
-              disabled={isSubmitting}
+              disabled={
+                !activeWs ||
+                confirmDeleteName.trim() !== activeWs.name.trim() ||
+                isSubmitting
+              }
             >
               {isSubmitting ? (
                 <>
@@ -507,9 +533,42 @@ export default function DashboardPage() {
           </>
         }
       >
-        <p className="text-xs text-red-600 dark:text-red-400">
-          This operation is permanent and cannot be undone. Only workspace owners have permission to delete this space.
-        </p>
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 p-3 rounded-md bg-red-500/10 border border-red-500/20 text-xs text-red-700 dark:text-red-400">
+            <AlertCircle className="w-4 h-4 shrink-0 text-red-500 mt-0.5" />
+            <div className="space-y-1">
+              <p className="font-semibold text-red-800 dark:text-red-300">
+                Warning: Irreversible Action
+              </p>
+              <p>
+                Deleting <strong className="font-semibold">{activeWs?.name}</strong> will
+                permanently erase all documents, comments, version histories, and member accesses
+                associated with this workspace. Only workspace owners have permission to delete this space.
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <label
+              htmlFor="dash-confirm-delete-input"
+              className="block text-xs text-[var(--text-muted)]"
+            >
+              To confirm deletion, please type{" "}
+              <span className="font-semibold text-[var(--text-primary)] font-mono">
+                {activeWs?.name}
+              </span>{" "}
+              below:
+            </label>
+            <Input
+              id="dash-confirm-delete-input"
+              placeholder={activeWs?.name || "Workspace name"}
+              value={confirmDeleteName}
+              onChange={(e) => setConfirmDeleteName(e.target.value)}
+              disabled={isSubmitting}
+              autoFocus
+            />
+          </div>
+        </div>
       </Dialog>
     </AppShell>
   );

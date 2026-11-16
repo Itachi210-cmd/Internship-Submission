@@ -8,6 +8,7 @@ import {
   readJsonBody,
   verifySameOriginCsrf,
 } from "@/lib/security/api-guard";
+import { workspaceEvents } from "@/lib/events/workspace-events";
 import { logStructured } from "@/lib/logger.mjs";
 
 interface RouteParams {
@@ -181,8 +182,70 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
       );
     }
 
-    await prisma.workspace.delete({
-      where: { id: workspaceId },
+    // Atomically clean up all dependent resources before deleting workspace record
+    await prisma.$transaction(async (tx) => {
+      const pages = await tx.page.findMany({
+        where: { workspaceId },
+        select: { id: true },
+      });
+      const pageIds = pages.map((p) => p.id);
+
+      if (pageIds.length > 0) {
+        // 1. Delete comments associated with pages
+        await tx.comment.deleteMany({
+          where: { pageId: { in: pageIds } },
+        });
+
+        // 2. Delete version snapshots associated with pages
+        await tx.versionSnapshot.deleteMany({
+          where: { pageId: { in: pageIds } },
+        });
+
+        // 3. Delete document states associated with pages
+        await tx.documentState.deleteMany({
+          where: { pageId: { in: pageIds } },
+        });
+
+        // 4. Detach parent page relationships to prevent recursive foreign key constraints
+        await tx.page.updateMany({
+          where: { workspaceId },
+          data: { parentPageId: null },
+        });
+
+        // 5. Delete pages
+        await tx.page.deleteMany({
+          where: { workspaceId },
+        });
+      }
+
+      // 6. Delete workspace memberships
+      await tx.workspaceMember.deleteMany({
+        where: { workspaceId },
+      });
+
+      // 7. Delete workspace record
+      await tx.workspace.delete({
+        where: { id: workspaceId },
+      });
+    });
+
+    // Notify connected collaboration clients in this workspace via SSE
+    try {
+      workspaceEvents.emitWorkspaceEvent(workspaceId, {
+        type: "WORKSPACE_DELETED",
+        workspaceId,
+      });
+    } catch (eventError) {
+      logStructured("warn", "WorkspaceAPI", "delete_event_broadcast_failed", {
+        workspaceId,
+        error: eventError,
+      });
+    }
+
+    logStructured("info", "WorkspaceAPI", "workspace_deleted", {
+      workspaceId,
+      ownerId: authCheck.data.workspace.ownerId,
+      userId: authCheck.data.session.userId,
     });
 
     return NextResponse.json(
